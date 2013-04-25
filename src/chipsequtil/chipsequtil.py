@@ -4,9 +4,10 @@ import re
 import string
 import sys
 
-from ConfigParser import ConfigParser
+from ConfigParser import SafeConfigParser
 from csv import DictReader
 from collections import defaultdict
+from pkg_resources import resource_filename
 
 import chipsequtil
 
@@ -138,15 +139,19 @@ class SmartFileIter :
             f = open(f)
         self._dict_reader = DictReader(f,delimiter='\t',fieldnames=self.FIELD_NAMES)
         self.fieldnames = self.FIELD_NAMES
-        self.curr_line = self._dict_reader.next()
-        self.skip_line_chars = skip_line_chars
-
-        # skip initial comment lines
-        while self.curr_line[self.FIELD_NAMES[0]][0] in self.skip_line_chars :
+        #shhuang# self.curr_line = self._dict_reader.next()
+        try :
             self.curr_line = self._dict_reader.next()
+            self.skip_line_chars = skip_line_chars
 
-        if self.FIELD_NAMES[0] in self.curr_line.values() :
-            self.curr_line = self._dict_reader.next()
+            # skip initial comment lines
+            while self.curr_line[self.FIELD_NAMES[0]][0] in self.skip_line_chars :
+                self.curr_line = self._dict_reader.next()
+
+            if self.FIELD_NAMES[0] in self.curr_line.values() :
+                self.curr_line = self._dict_reader.next()
+        except StopIteration :
+            self.curr_line = None
 
     def __iter__(self) :
         return self
@@ -576,7 +581,7 @@ class MACSFile(SmartFileIter) :
         else :
             f = macs_fn
         done_with_header = False
-        while not done_with_header :
+        while (done_with_header==False) :
             l = f.next().strip()
             if l.startswith('#') :
                 for regex in MACSFile._METADATA_REGEXES :
@@ -595,7 +600,8 @@ class MACSFile(SmartFileIter) :
 class MACSOutput(object) :
     FIELD_NAMES = MACSFile.FIELD_NAMES
 
-GLOBAL_SETTINGS_FN = os.path.join(os.path.split(chipsequtil.__file__)[0],'org_settings.cfg')
+#GLOBAL_SETTINGS_FN = os.path.join(os.path.split(chipsequtil.__file__)[0],'org_settings.cfg')
+GLOBAL_SETTINGS_FN = resource_filename('chipsequtil', 'org_settings.cfg')
 LOCAL_SETTINGS_FN = os.path.expanduser(os.path.join('~','.org_settings.cfg'))
 _ALL_SETTINGS, _LOCAL_SETTINGS, _GLOBAL_SETTINGS = range(3)
 
@@ -603,7 +609,7 @@ def _get_org_settings(org_key=None,addnl_configs=[],src=_ALL_SETTINGS) :
     """Utility function used by get_org_settings and get_all_settings, should \
     not be called directly"""
 
-    config = ConfigParser()
+    config = SafeConfigParser()
     chipsequtil_base =     conf_fns = []
     if src in [_LOCAL_SETTINGS, _ALL_SETTINGS] :
         conf_fns.append(LOCAL_SETTINGS_FN)
@@ -674,6 +680,95 @@ def check_org_settings(org_key,setting_list) :
     internally to sanity check org settings.'''
     settings = get_org_settings(org_key)
     return all([s in settings.keys() for s in setting_list])
+
+#GLOBAL_TOOL_SETTINGS_FN = os.path.join(os.path.split(chipsequtil.__file__)[0],'tool_settings.cfg')
+GLOBAL_TOOL_SETTINGS_FN = resource_filename('chipsequtil', 'tool_settings.cfg')
+LOCAL_TOOL_SETTINGS_FN = os.path.expanduser(os.path.join('~','.tool_settings.cfg'))
+
+def _get_tool_settings(tool_key=None,addnl_configs=[],src=_ALL_SETTINGS) :
+    """Utility function used by get_tool_settings and get_all_tool_settings, should \
+    not be called directly"""
+
+    config = SafeConfigParser()
+    chipsequtil_base =     conf_fns = []
+    if src in [_LOCAL_SETTINGS, _ALL_SETTINGS] :
+        conf_fns.append(LOCAL_TOOL_SETTINGS_FN)
+    if src in [_GLOBAL_SETTINGS, _ALL_SETTINGS] :
+        conf_fns.append(GLOBAL_TOOL_SETTINGS_FN)
+    config.read(conf_fns+addnl_configs)
+
+    d = {}
+    if tool_key is None :
+        for sec in config.sections() :
+            # try to cast numeric-looking arguments into float, int
+            d[sec] = dict([(k,parse_number(v)) for k,v in config.items(sec)])
+    else :
+        d = dict([(k,parse_number(v)) for k,v in config.items(tool_key)])
+
+    return d
+
+def get_tool_settings(tool_key,addnl_configs=[]) :
+    '''Returns a dict of setting/path values for a given tool as specified
+    in system-wide and user's settings. *tool_key* is the tool name as found
+    in the config file, *e.g.* bowtie.  *addnl_configs* are filenames of other
+    configuration files to add to the set of settings, usually not needed.
+    Example usage::
+    
+      >>> tool_d = get_tool_settings('bowtie')
+      >>> tool_d
+          {'affy_to_known_path': '/nfs/genomes/mouse_gp_jul_07/anno/knownToMOE43-mm9.txt',
+           'annotation_path': '/nfs/genomes/mouse_gp_jul_07/anno/refFlat-mm9.txt',
+           'description': "UCSC mm9 (July '07 build) with full TRANSFAC hypothesis set",
+           'genome': 'mm9',
+           'genome_dir': '/nfs/genomes/mouse_gp_jul_07',
+           'genome_size': 2107000000,
+           'known_gene_anno_path': '/nfs/genomes/mouse_gp_jul_07/anno/knownGene-mm9.txt',
+           'known_gene_xref_path': '/nfs/genomes/mouse_gp_jul_07/anno/kgXref-mm9.txt',
+           'refgene_anno_path': '/nfs/genomes/mouse_gp_jul_07/anno/refFlat-mm9.txt',
+           'theme_hypotheses': '/nfs/vendata/cwng/TRANSFAC/2010_transfac_vert_all_filtic9.tamo',
+           'theme_markov': '/nfs/data/cwng/chipseq/hypotheses/Mouse.markov',
+           'ucsc_chrom_sizes': '/nfs/genomes/mouse_gp_jul_07/mm9.chrom.sizes'}
+      >>> get_org_settings('mm9')['genome_dir']
+          '/nfs/genomes/mouse_gp_jul_07'
+
+    '''
+    return _get_tool_settings(tool_key,addnl_configs=addnl_configs)
+
+
+def get_all_tool_settings(addnl_configs=[]) :
+    '''Returns a dict of setting/path values for every tool as specified in
+    system-wide and user's settings.'''
+    return _get_tool_settings(None,addnl_configs=addnl_configs)
+
+
+def get_global_tool_settings() :
+    '''Returns a dict of the global setting/path values installed with the
+    package.'''
+    return _get_tool_settings(None,src=_GLOBAL_SETTINGS)
+
+
+def get_local_tool_settings() :
+    '''Returns a dict of the current user's setting/path values taken from
+    ~/.tool_settings.cfg if it exists.'''
+    return _get_tool_settings(None,src=_LOCAL_SETTINGS)
+
+
+def check_tool_settings(tool_key,setting_list) :
+    '''Returns true if all setting names in *setting_list* are found in the 
+    org settings for organism *tool_key* and false otherwise. Mostly used
+    internally to sanity check org settings.'''
+    settings = get_tool_settings(tool_key)
+    return all([s in settings.keys() for s in setting_list])
+
+def get_macs_name(opts):
+    # parse macs_args so we can extract mfold and pvalue...in a rather silly way
+    macs_mfold = [x for x in opts.macs_args.split(' ') if 'mfold' in x]
+    macs_mfold = macs_mfold[0].split('=',1)[1] if len(macs_mfold) >= 1 else 'DEF'
+
+    macs_pvalue = [x for x in opts.macs_args.split(' ') if 'pvalue' in x]
+    macs_pvalue = macs_pvalue[0].split('=',1)[1] if len(macs_pvalue) >= 1 else 'DEF'
+    macs_name = opts.exp_name+'_mfold%s_pval%s'%(macs_mfold,macs_pvalue)
+    return macs_name
 
 
 RC_MAP = string.maketrans('acgtACGT','tgcaTGCA')

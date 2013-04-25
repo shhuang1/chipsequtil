@@ -3,6 +3,8 @@
 import os
 import sys
 
+import setuptools
+
 from distutils.core import setup
 #from ez_setup import use_setuptools
 #use_setuptools()

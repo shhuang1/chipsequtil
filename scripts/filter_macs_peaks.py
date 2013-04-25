@@ -168,10 +168,6 @@ if __name__ == '__main__' :
         else :
             pass_recs.append([peak[k] for k in MACSOutput.FIELD_NAMES])
 
-    if len(pass_recs) == 0 :
-        warn('WARNING: no records remain after filtering\n')
-        sys.exit(1)
-
     # sorting
     if opts.sort_by :
         pass_recs.sort(key=_sort_keys[opts.sort_by],reverse=opts.sort_dir != 'ASCEND')
@@ -187,6 +183,13 @@ if __name__ == '__main__' :
                            'filters':filters_str,
                            'sort_by':sort_str,
                            'shuffled':shuffled_str}
+
+    if len(pass_recs) == 0 :
+        warn('WARNING: no records remain after filtering\n')
+        if not opts.no_header :
+            out_f.write(summary)
+            out_f.write('\t'.join(MACSOutput.FIELD_NAMES)+'\n')
+        sys.exit(1)
 
     # print summary only
     if opts.summary :

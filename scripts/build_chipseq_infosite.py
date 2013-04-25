@@ -3,6 +3,9 @@
 import getpass
 import glob
 import json
+import lxml.html
+import lxml.html.builder
+import numpy as np
 import matplotlib
 matplotlib.use('AGG')
 import matplotlib.pyplot as mp
@@ -15,10 +18,30 @@ from collections import defaultdict
 from csv import reader, writer, DictReader
 from math import log
 from optparse import OptionParser
+from pkg_resources import resource_filename
 from subprocess import call
 
-from chipsequtil import MACSFile, get_org_settings
+from chipseq_pipeline import parser as pipeline_parser
+from chipsequtil import MACSFile, get_org_settings, get_global_tool_settings, get_local_tool_settings, check_tool_settings, GLOBAL_TOOL_SETTINGS_FN, LOCAL_TOOL_SETTINGS_FN, get_macs_name
 from reStUtil import *
+
+class ReStRaw(ReStBase) :
+    '''Raw directive.  Allows the contents to be included verbatim.'''
+
+    def __init__(self,format,content='',options={}) :
+        self.format = format
+        self.content = content
+        self.options = options
+
+    def build_text(self) :
+        self.text = '.. raw:: %s\n'%(self.format)
+        if (self.content!=''):
+            self.text += self.content
+            self.text += '\n'
+        for k,v in self.options.items():
+            self.text += '   :%s: %s\n'%(str(k),str(v))
+        self.text += '\n'
+
 
 usage = '%prog [options] [<peak filename> <peak filename> ...]'
 parser = OptionParser(usage=usage)
@@ -74,12 +97,27 @@ parser.add_option('--skip-motif-stuff',dest='skip_motif_stuff',action='store_tru
   "stage_dir": "/nfs/antdata/web_stage/labadorf"
 }
 
+def get_peak_stats_minmax(peak_stats1,peak_stats2,key_name):
+    minval = min(np.min(peak_stats1[key_name],axis=0),np.min(peak_stats2[key_name],axis=0))
+    maxval = max(np.max(peak_stats1[key_name],axis=0),np.max(peak_stats2[key_name],axis=0))
+    return (minval,maxval)
+
 if __name__ == '__main__' :
 
     opts, args = parser.parse_args(sys.argv[1:])
 
     exp_dir = os.path.abspath(opts.dir)
     exp_name = opts.name if opts.name is not None else os.path.basename(exp_dir)
+    css_path = resource_filename("chipsequtil", 'static/css/lsr.css')
+
+    ############################################################################
+    # get settings
+    ############################################################################
+    global_tool_settings = get_global_tool_settings()
+    local_tool_settings = get_local_tool_settings()
+    all_tool_settings = {}
+    all_tool_settings.update(global_tool_settings)
+    all_tool_settings.update(local_tool_settings)
 
     # 1. find the param JSON file
     param_json_fn = glob.glob('*params.json')
@@ -87,17 +125,23 @@ if __name__ == '__main__' :
         sys.stderr.write('Could not find parameter file, building one as best I can\n')
         curr_user = getpass.getuser()
         json_d = {'analysis path':os.getcwd(),
-                  'stage url':'http://fraenkel.mit.edu/stage/'+curr_user,
-                  'stage dir':'/nfs/antdata/web_stage/'+curr_user
+                  'stage url':all_tool_settings['web_stage'].get_('stage_url')+curr_user,
+                  'stage dir':all_tool_settings['web_stage'].get_('stage_dir')+curr_user
                  }
     else :
         if len(param_json_fn) > 1 :
             sys.stderr.write('Found more than one parameter file, picking the first one: %s\n'%','.join(param_json_fn))
         param_json_fn = param_json_fn[0]
         json_d = json.load(open(param_json_fn))
+        pipeline_args_str = ['%s=%s'%(k,v) for (k,v) in json_d['pipeline args'].iteritems()]
+        pipeline_opts,pipeline_args =  pipeline_parser.parse_args(pipeline_args_str)
+
+    macs_name = get_macs_name(pipeline_opts)
+    meme_dir_name = macs_name + '_meme'
+    meme_path = os.path.join(os.getcwd(),meme_dir_name)
 
     # 2. make a new directory to save all the stuff
-    infosite_dir_name = exp_name+'_infosite'
+    infosite_dir_name = macs_name+'_infosite'
     infosite_path = os.path.join(os.getcwd(),infosite_dir_name)
     if not os.path.exists(infosite_path) :
         os.mkdir(infosite_path)
@@ -171,6 +215,12 @@ if __name__ == '__main__' :
                 neg_peak_stats['fold_enrichment'].append(peak['fold_enrichment'])
                 neg_peak_stats['fdr'].append(peak['FDR(%)'])
                 num_peaks += 1
+            if (num_peaks==0):
+                neg_peak_stats['length'] = np.zeros((len(peak_stats['length']),0))
+                neg_peak_stats['tags'] = np.zeros((len(peak_stats['tags']),0))
+                neg_peak_stats['pvalue'] = np.zeros((len(peak_stats['pvalue']),0))
+                neg_peak_stats['fold_enrichment'] = np.zeros((len(peak_stats['fold_enrichment']),0))
+                neg_peak_stats['fdr'] = np.zeros((len(peak_stats['fdr']),0))
 
             peak_json[peak_fn]['negative peaks'] = num_peaks
             peak_json[peak_fn]['reads under negative peaks'] = sum(peak_stats['tags'])
@@ -192,11 +242,13 @@ if __name__ == '__main__' :
         # create histograms for each of the attributes
         len_hist_name = macs_f.file_info['name']+'_length.png'
         len_hist_fn = os.path.join(infosite_img_path,len_hist_name)
-        len_hist_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+len_hist_name
+#        len_hist_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+len_hist_name
+        len_hist_url = infosite_dir_name+'/images/'+len_hist_name
         peak_json[peak_fn]['length distribution url'] = len_hist_url
         mp.figure(figsize=figsize)
         mp.subplots_adjust(**subplots_sizes)
-        mp.hist((peak_stats['length'],neg_peak_stats['length']),label=hist_labels,bins=20,log=True)
+        length_min,length_max = get_peak_stats_minmax(peak_stats,neg_peak_stats,'length')
+        mp.hist((peak_stats['length'],neg_peak_stats['length']),label=hist_labels,bins=20,range=(length_min,length_max),log=True)
         mp.title('%s\npeak length distribution'%macs_f.file_info['name'])
         mp.xlabel('peak length')
         mp.ylabel('# peaks')
@@ -206,11 +258,13 @@ if __name__ == '__main__' :
 
         tags_hist_name = macs_f.file_info['name']+'_tags.png'
         tags_hist_fn = os.path.join(infosite_img_path,tags_hist_name)
-        tags_hist_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+tags_hist_name
+#        tags_hist_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+tags_hist_name
+        tags_hist_url = infosite_dir_name+'/images/'+tags_hist_name
         peak_json[peak_fn]['tag distribution url'] = tags_hist_url
         mp.figure(figsize=figsize)
         mp.subplots_adjust(**subplots_sizes)
-        mp.hist((peak_stats['tags'],neg_peak_stats['tags']),label=hist_labels,bins=20,log=True)
+        tags_min,tags_max = get_peak_stats_minmax(peak_stats,neg_peak_stats,'tags')
+        mp.hist((peak_stats['tags'],neg_peak_stats['tags']),label=hist_labels,bins=20,range=(tags_min,tags_max),log=True)
         mp.title('%s\npeak tag count distribution'%macs_f.file_info['name'])
         mp.xlabel('# tags')
         mp.ylabel('# peaks')
@@ -220,11 +274,13 @@ if __name__ == '__main__' :
 
         pval_hist_name = macs_f.file_info['name']+'_pval.png'
         pval_hist_fn = os.path.join(infosite_img_path,pval_hist_name)
-        pval_hist_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+pval_hist_name
+#        pval_hist_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+pval_hist_name
+        pval_hist_url = infosite_dir_name+'/images/'+pval_hist_name
         peak_json[peak_fn]['pvalue distribution url'] = pval_hist_url
         mp.figure(figsize=figsize)
         mp.subplots_adjust(**subplots_sizes)
-        mp.hist((peak_stats['pvalue'],neg_peak_stats['pvalue']),label=hist_labels,bins=20,log=True)
+        pvalue_min,pvalue_max = get_peak_stats_minmax(peak_stats,neg_peak_stats,'pvalue')
+        mp.hist((peak_stats['pvalue'],neg_peak_stats['pvalue']),label=hist_labels,bins=20,range=(pvalue_min,pvalue_max),log=True)
         mp.title('%s\npeak -10*log10(p-valuek) distribution'%macs_f.file_info['name'])
         mp.xlabel('-10*log10(p-value)')
         mp.ylabel('# peaks')
@@ -234,11 +290,13 @@ if __name__ == '__main__' :
 
         fold_hist_name = macs_f.file_info['name']+'_fold.png'
         fold_hist_fn = os.path.join(infosite_img_path,fold_hist_name)
-        fold_hist_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+fold_hist_name
+#        fold_hist_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+fold_hist_name
+        fold_hist_url = infosite_dir_name+'/images/'+fold_hist_name
         peak_json[peak_fn]['fold distribution url'] = fold_hist_url
         mp.figure(figsize=figsize)
         mp.subplots_adjust(**subplots_sizes)
-        mp.hist((peak_stats['fold_enrichment'],neg_peak_stats['fold_enrichment']),label=hist_labels,bins=20,log=True)
+        fe_min,fe_max = get_peak_stats_minmax(peak_stats,neg_peak_stats,'fold_enrichment')
+        mp.hist((peak_stats['fold_enrichment'],neg_peak_stats['fold_enrichment']),label=hist_labels,bins=20,range=(fe_min,fe_max),log=True)
         mp.title('%s\npeak fold enrichment distribution'%macs_f.file_info['name'])
         mp.xlabel('fold enrichment')
         mp.ylabel('# peaks')
@@ -248,11 +306,13 @@ if __name__ == '__main__' :
 
         fdr_hist_name = macs_f.file_info['name']+'_fdr.png'
         fdr_hist_fn = os.path.join(infosite_img_path,fdr_hist_name)
-        fdr_hist_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+fdr_hist_name
+        #fdr_hist_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+fdr_hist_name
+        fdr_hist_url = infosite_dir_name+'/images/'+fdr_hist_name
         peak_json[peak_fn]['fdr distribution url'] = fdr_hist_url
         mp.figure(figsize=figsize)
         mp.subplots_adjust(**subplots_sizes)
-        mp.hist(peak_stats['fdr'],label=hist_labels[0],bins=20,log=True)
+        fdr_min,fdr_max = get_peak_stats_minmax(peak_stats,neg_peak_stats,'fdr')
+        mp.hist(peak_stats['fdr'],label=hist_labels[0],bins=20,range=(fdr_min,fdr_max),log=True)
         mp.title('%s\npeak fdr distribution'%macs_f.file_info['name'])
         mp.xlabel('fdr')
         mp.ylabel('# peaks')
@@ -262,7 +322,8 @@ if __name__ == '__main__' :
 
         chr_dist_name = macs_f.file_info['name']+'_chr_dist.png'
         chr_dist_fn = os.path.join(infosite_img_path,chr_dist_name)
-        chr_dist_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+chr_dist_name
+        #chr_dist_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+chr_dist_name
+        chr_dist_url = infosite_dir_name+'/images/'+chr_dist_name
         peak_json[peak_fn]['chr distribution url'] = chr_dist_url
         chromos = []
         if json_d.has_key('org') :
@@ -326,7 +387,8 @@ if __name__ == '__main__' :
         # pos vs neg peaks
         pos_v_neg_name = '%s_pos_v_neg.png'%macs_f.file_info['name']
         pos_v_neg_fn = os.path.join(infosite_img_path,pos_v_neg_name)
-        pos_v_neg_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+pos_v_neg_name
+        #pos_v_neg_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+pos_v_neg_name
+        pos_v_neg_url = infosite_dir_name+'/images/'+pos_v_neg_name
         peak_json[peak_fn]['pos v neg url'] = pos_v_neg_url
         cmd = 'plot_pos_vs_neg_peaks.py --output=%s %s %s'%(pos_v_neg_fn,peak_fn, neg_peak_fn)
         sys.stderr.write(cmd+'\n')
@@ -341,32 +403,39 @@ if __name__ == '__main__' :
             filtered_peak_fns = glob.glob('%s_peaks_*'%macs_f.file_info['name'])
             filtered_peak_fns.sort(key=lambda x: len(x),reverse=True)
             filtered_peak_fn = filtered_peak_fns[0]
+            print filtered_peak_fn
 
+            # THEME
             motif_results_fns = glob.glob('%s_motifs_beta*_cv*[0-9].tamo'%macs_f.file_info['name'])
-            motif_results_fn = motif_results_fns[0]
-            #TODO - do check for file exists
+            if (len(motif_results_fns)>0):
+                motif_results_fn = motif_results_fns[0]
+                #TODO - do check for file exists
 
-            # motif_scan.py <org> <peak fn> <TAMO motif fn>
-            fixed_peak_width = ''
-            if json_d['fixed peak width'] != 'none' :
-                fixed_peak_width = '--fixed-peak-width=%s'%json_d['fixed peak width']
+                # motif_scan.py <org> <peak fn> <TAMO motif fn>
+                fixed_peak_width = ''
+                if json_d['fixed peak width'] != 'none' :
+                    fixed_peak_width = '--fixed-peak-width=%s'%json_d['fixed peak width']
 
-            cmd = 'motif_scan.py %s --dir=%s/images/ %s %s %s'
-            cmd = cmd%(fixed_peak_width,infosite_dir_name,json_d['org'],filtered_peak_fn,motif_results_fn)
-            sys.stderr.write(cmd+'\n')
-            call(cmd,shell=True)
+                cmd = 'motif_scan.py %s --dir=%s/images/ %s %s %s'
+                cmd = cmd%(fixed_peak_width,infosite_dir_name,json_d['org'],filtered_peak_fn,motif_results_fn)
+                sys.stderr.write(cmd+'\n')
+                call(cmd,shell=True)
+            
+            # MEME-chip
+            
 
         # pot_peaks_vs_motifs.py <peaks fn> <seq score fn> <bg score fn>
 
 
     # 5. build reSt document
-    reSt_fn = exp_name+'_info.rst'
+    reSt_fn = macs_name+'_info.rst'
     reSt_path = os.path.join(infosite_path,reSt_fn)
-    reSt_html_name = exp_name+'_info.html'
-    reSt_html_path = os.path.join(infosite_path,reSt_html_name)
+    reSt_path = reSt_fn
+    reSt_html_name = macs_name+'_info.html'
+    reSt_html_path = os.path.join(os.getcwd(),reSt_html_name)
     reSt_url = json_d['stage url'] + '/' + infosite_dir_name + '/' + reSt_html_name
     doc = ReStDocument(reSt_path)
-    doc.add(ReStSection("Infopage for %s"%exp_name))
+    doc.add(ReStSection("Infopage for %s"%macs_name))
 
     # basic experiment stats table
     ident = lambda x: x or 'unknown'
@@ -418,8 +487,8 @@ if __name__ == '__main__' :
 
         # link to the peaks file
         peak_infosite_name = os.path.join(infosite_dir_name,peak_fn)
-        peak_infosite_path = os.path.abspath(peak_infosite_name)
-        peak_infosite_url = json_d['stage url'] + '/' + peak_infosite_name
+        #peak_infosite_url = json_d['stage url'] + '/' + peak_infosite_name
+        peak_infosite_url = peak_infosite_name
         call('cp %s %s'%(peak_fn,os.path.join(infosite_dir_name,peak_fn)),shell=True)
         doc.add(ReStSimpleTable(None,[('**MACS Peaks File**','`%s`_'%peak_infosite_url)]))
         doc.add(ReStHyperlink(peak_infosite_url,url=peak_infosite_url))
@@ -461,7 +530,8 @@ if __name__ == '__main__' :
         gene_link = os.path.join(infosite_dir_name,gene_fn)
         if not os.path.exists(gene_link) :
             shutil.copyfile(gene_fn,gene_link)
-        gene_url = json_d['stage url']+'/'+gene_link
+        #gene_url = json_d['stage url']+'/'+gene_link
+        gene_url = gene_fn
 
         # gather other gene mapping stats
         # knownGeneID
@@ -495,8 +565,8 @@ if __name__ == '__main__' :
             gene_pvals[rec['geneSymbol']] = max(gene_pvals[rec['geneSymbol']],float(rec['-10*log10(pvalue)']))
         gene_pvals = gene_pvals.items()
         gene_pvals.sort(key=lambda x: x[1],reverse=True)
-        for k,v in gene_pvals[:20]:
-            print k,v
+        #for k,v in gene_pvals[:20]:
+        #    print k,v
         gene_mapping_data = [('**# knownGenes mapped**',len(gene_stats['num knownGenes'])),
                              ('**# gene symbols mapped**',len(gene_stats['num geneSymbols'])),
                              ('**Top 10 gene symbols**',','.join([x[0] for x in gene_pvals[:10]])),
@@ -504,10 +574,10 @@ if __name__ == '__main__' :
                             ]
 
         # plots from plot_peak_loc_dist.py
-        gene_pie_name = exp_name+'_gene_map.png'
-        peak_pie_name = exp_name+'_peak_map.png'
-        hist_name = exp_name+'_peak_dist.png'
-        pval_bar_name = exp_name+'_pval_bar.png'
+        gene_pie_name = macs_name+'_gene_map.png'
+        peak_pie_name = macs_name+'_peak_map.png'
+        hist_name = macs_name+'_peak_dist.png'
+        pval_bar_name = macs_name+'_pval_bar.png'
         peak_loc_d = {'out_dir':infosite_path,
                       'gene_pie_fn':os.path.join(infosite_path,'images',gene_pie_name),
                       'peak_pie_fn':os.path.join(infosite_path,'images',peak_pie_name),
@@ -521,10 +591,14 @@ if __name__ == '__main__' :
               '%(peak_fn)s %(gene_name)s'
         sys.stderr.write(cmd%peak_loc_d+'\n')
         call(cmd%peak_loc_d,shell=True)
-        peak_stats['gene map url'] = json_d['stage url']+'/'+infosite_dir_name+'/images/'+gene_pie_name
-        peak_stats['peak map url'] = json_d['stage url']+'/'+infosite_dir_name+'/images/'+peak_pie_name
-        peak_stats['pval bar url'] = json_d['stage url']+'/'+infosite_dir_name+'/images/'+pval_bar_name
-        peak_stats['dist url'] = json_d['stage url']+'/'+infosite_dir_name+'/images/'+hist_name
+        #peak_stats['gene map url'] = json_d['stage url']+'/'+infosite_dir_name+'/images/'+gene_pie_name
+        #peak_stats['peak map url'] = json_d['stage url']+'/'+infosite_dir_name+'/images/'+peak_pie_name
+        #peak_stats['pval bar url'] = json_d['stage url']+'/'+infosite_dir_name+'/images/'+pval_bar_name
+        #peak_stats['dist url'] = json_d['stage url']+'/'+infosite_dir_name+'/images/'+hist_name
+        peak_stats['gene map url'] = infosite_dir_name+'/images/'+gene_pie_name
+        peak_stats['peak map url'] = infosite_dir_name+'/images/'+peak_pie_name
+        peak_stats['pval bar url'] = infosite_dir_name+'/images/'+pval_bar_name
+        peak_stats['dist url'] = infosite_dir_name+'/images/'+hist_name
 
         # make links to the different peaks files
         feature_patts = ('promoter.txt','gene_exon.txt','gene_intron.txt','after.txt','intergenic.xls')
@@ -538,7 +612,8 @@ if __name__ == '__main__' :
                 sys.stderr.write('Warning: %s could not be found, skipping feature type\n'%os.path.join(infosite_dir_name,feature_fn))
                 continue
             feature_path = feature_path[0]
-            feature_url = json_d['stage url']+'/'+feature_path
+            #feature_url = json_d['stage url']+'/'+feature_path
+            feature_url = feature_path
 
             # create UCSC formatted versions of the files
             if patt.endswith('.txt') : # these have gene columns
@@ -560,14 +635,17 @@ if __name__ == '__main__' :
                 ucsc_feature_writer.writerow(rec)
             ucsc_feature_f.close()
 
-            ucsc_feature_url = json_d['stage url']+'/'+ucsc_feature_path
+            #ucsc_feature_url = json_d['stage url']+'/'+ucsc_feature_path
+            ucsc_feature_url = ucsc_feature_path
 
             feature_data.append(('**%s peaks**'%feature_type,'`%s`_ `UCSC %s`_'%(feature_url,feature_type)))
             feature_urls.append(ReStHyperlink(feature_url,url=feature_url))
             feature_urls.append(ReStHyperlink('UCSC %s'%feature_type,url=ucsc_feature_url))
 
         gene_mapping_data.extend(feature_data)
-        feat_tbl = ReStSimpleTable(('**Gene mapping data**',''),gene_mapping_data)
+        #feat_tbl = ReStSimpleTable(('*Gene mapping data*',''),gene_mapping_data)
+        doc.add(ReStSection('Gene mapping data',level=2))
+        feat_tbl = ReStSimpleTable(None,gene_mapping_data)
         doc.add(feat_tbl)
         doc.add(ReStHyperlink(gene_url,url=gene_url))
         for url in feature_urls :
@@ -587,87 +665,119 @@ if __name__ == '__main__' :
         doc.add(img_tbl3)
 
         # now put some motif stuff up there
-
-
         if opts.skip_motif_stuff :
             sys.stderr.write('Obediently skipping even more motif stuff\n')
         else :
+            doc.add(ReStSection("Motif analysis",level=2))
+
             # THEME refines all motifs, display the top 30
+            if (len(motif_results_fns)>0):
+                # for now, just list a table of the top 30 significant, unrefined motifs
+                doc.add(ReStSection('%s Top 30 Refined Motif Results'%peak_stats['name'],level=3))
+                motif_results_fns = glob.glob('%s_motifs_beta*_cv*[0-9].txt'%macs_f.file_info['name']) #catRun_mfold10,30_pval1e-5_motifs_beta0.0_cv5.txt
+                #TODO - do check for file exists
 
-            # for now, just list a table of the top 30 significant, unrefined motifs
-            doc.add(ReStSection('%s Top 30 Refined Motif Results'%peak_stats['name'],level=3))
-            motif_results_fns = glob.glob('%s_motifs_beta*_cv*[0-9].txt'%macs_f.file_info['name']) #catRun_mfold10,30_pval1e-5_motifs_beta0.0_cv5.txt
-            #TODO - do check for file exists
+                motif_results_fn = motif_results_fns[0]
 
-            motif_results_fn = motif_results_fns[0]
+                motif_reader = reader(open(motif_results_fn),delimiter='\t')
 
-            motif_reader = reader(open(motif_results_fn),delimiter='\t')
-
-            motif_header = motif_reader.next()
-            motif_data = []
-            top_n = 30
-            motif_fmts = (ident,ident,int,fl_str,fl_str,fl_str,fl_str,fl_str,fl_str)
-            motif_plot_urls = []
-            for rec in motif_reader :
-                motif_data.append([f(x) for f,x in zip(motif_fmts,rec)])
+                motif_header = motif_reader.next()
+                motif_data = []
+                top_n = 30
+                motif_fmts = (ident,ident,int,fl_str,fl_str,fl_str,fl_str,fl_str,fl_str)
+                motif_plot_urls = []
+                for rec in motif_reader :
+                    motif_data.append([f(x) for f,x in zip(motif_fmts,rec)])
+                    """
+                    if rec[2] in motif_sig_inds_d.keys() :
+                        from_id = motif_sig_inds_d[rec[2]]
+                        try :
+                            old_id_fn = glob.glob(infosite_dir_name+'/images/*_%d_peakmot.png'%from_id)[0]
+                            new_id_fn = old_id_fn.replace('_%d_'%from_id,'_%s_'%rec[2])
+                            os.rename(old_id_fn,new_id_fn)
+                        except :
+                            sys.stderr.write("Couldn't rename file for pattern %s, just " \
+                                             "assuming its there\n"%(infosite_dir_name+'/images/*_%d_peakmot.png'%from_id))
                 """
-                if rec[2] in motif_sig_inds_d.keys() :
-                    from_id = motif_sig_inds_d[rec[2]]
-                    try :
-                        old_id_fn = glob.glob(infosite_dir_name+'/images/*_%d_peakmot.png'%from_id)[0]
-                        new_id_fn = old_id_fn.replace('_%d_'%from_id,'_%s_'%rec[2])
-                        os.rename(old_id_fn,new_id_fn)
-                    except :
-                        sys.stderr.write("Couldn't rename file for pattern %s, just " \
-                                         "assuming its there\n"%(infosite_dir_name+'/images/*_%d_peakmot.png'%from_id))
-                """
-                new_id_fn = glob.glob(infosite_dir_name+'/images/*_%s_peakmot.png'%rec[2])[0]
-                motif_plot_urls.append(json_d['stage url']+'/'+new_id_fn)
+                    new_id_fn = glob.glob(infosite_dir_name+'/images/*_%s_peakmot.png'%rec[2])[0]
+                    motif_plot_urls.append(json_d['stage url']+'/'+new_id_fn)
 
-            doc.add(ReStSimpleTable(['**%s**'%x for x in motif_header],motif_data[:top_n]))
+                    doc.add(ReStSimpleTable(['**%s**'%x for x in motif_header],motif_data[:top_n]))
 
-            # create another file with the full table
-            motif_results_base, motif_results_ext = os.path.splitext(motif_results_fn)
-            motif_doc_fn = motif_results_base+'.rst'
-            motif_doc_path = os.path.join(infosite_path,motif_doc_fn)
-            motif_doc_html_fn = motif_results_base+'.html'
-            motif_doc_html_path = os.path.join(infosite_path,motif_doc_html_fn)
-            motif_doc_url = json_d['stage url']+'/'+infosite_dir_name+'/'+motif_doc_html_fn
-            motif_doc = ReStDocument(motif_doc_path)
-            motif_doc.add(ReStSection('%s Full Motif Results'%peak_stats['name']))
-            motif_doc.add('`Back to main infopage`_')
-            motif_doc.add(ReStSimpleTable(['**%s**'%x for x in motif_header],motif_data))
-            motif_doc.add('`Back to main infopage`_')
-            motif_doc.add(ReStHyperlink('Back to main infopage',url=reSt_url))
-            motif_doc.write()
-            motif_doc.close()
-            rst2html_call = 'rst2html.py --stylesheet-path=/nfs/antdata/web_stage/css/lsr.css ' \
-                            '%s %s'%(motif_doc_path,motif_doc_html_path)
-            sys.stderr.write(rst2html_call+'\n')
-            r = call(rst2html_call,shell=True)
-            doc.add('`All refined motifs`_')
-            doc.add(ReStHyperlink('All refined motifs',url=motif_doc_url))
+                # create another file with the full table
+                motif_results_base, motif_results_ext = os.path.splitext(motif_results_fn)
+                motif_doc_fn = motif_results_base+'.rst'
+                motif_doc_path = os.path.join(infosite_path,motif_doc_fn)
+                motif_doc_html_fn = motif_results_base+'.html'
+                motif_doc_html_path = os.path.join(infosite_path,motif_doc_html_fn)
+                motif_doc_url = json_d['stage url']+'/'+infosite_dir_name+'/'+motif_doc_html_fn
+                motif_doc = ReStDocument(motif_doc_path)
+                motif_doc.add(ReStSection('%s Full Motif Results'%peak_stats['name']))
+                motif_doc.add('`Back to main infopage`_')
+                motif_doc.add(ReStSimpleTable(['**%s**'%x for x in motif_header],motif_data))
+                motif_doc.add('`Back to main infopage`_')
+                motif_doc.add(ReStHyperlink('Back to main infopage',url=reSt_url))
+                motif_doc.write()
+                motif_doc.close()
+                #rst2html_call = 'rst2html.py --stylesheet-path=/nfs/antdata/web_stage/css/lsr.css ' \
+                #                '%s %s'%(motif_doc_path,motif_doc_html_path)
+                rst2html_call = 'rst2html.py --stylesheet-path=%s ' \
+                    '%s %s'%(motif_doc_path,css_path,motif_doc_html_path)
+                sys.stderr.write(rst2html_call+'\n')
+                r = call(rst2html_call,shell=True)
+                doc.add('`All refined motifs`_')
+                doc.add(ReStHyperlink('All refined motifs',url=motif_doc_url))
 
-            # individual motif plots
-            plt_tbl = []
-            for i,url in enumerate(motif_plot_urls[:30]) :
-                if i%3 == 0 :
-                    plt_tbl.append([])
-                plt_tbl[-1].append(ReStImage(url))
+                # individual motif plots
+                plt_tbl = []
+                for i,url in enumerate(motif_plot_urls[:30]) :
+                    if i%3 == 0 :
+                        plt_tbl.append([])
+                    plt_tbl[-1].append(ReStImage(url))
 
-            doc.add(ReStSimpleTable(('**Peak strength vs refined motif strength**','(based on top 2000 peak sequences by pvalue)',''),plt_tbl))
+                doc.add(ReStSimpleTable(('**Peak strength vs refined motif strength**','(based on top 2000 peak sequences by pvalue)',''),plt_tbl))
+            #end if (len(motif_results_fns)>0):
+
+            doc.add(ReStSection('MEME-ChIP results',level=3))
+            meme_index_path = os.path.join(meme_path,'index.html')
+            print meme_index_path
+            if (os.path.exists(meme_index_path)):
+                html = lxml.html.parse(meme_index_path)
+                page = html.getroot()
+                script_list = page.findall("head/script")
+                last_script = script_list[-1]
+                add_link_script = """  
+  var progs = data["programs"];
+  for (var i = 0; i < progs.length; i++) {
+    var prog = progs[i];
+    if (prog["outputs"].length > 0) {
+      var outputs = prog["outputs"];
+      for (var j = 0; j < outputs.length; j++) {
+        outputs[j]["file"] =  "%s\/" + outputs[j]["file"]
+      }
+    }
+  }
+"""%(os.path.relpath(meme_path,os.path.dirname(reSt_html_path)))
+                script_el = lxml.html.builder.SCRIPT(add_link_script)
+                last_script.addnext(script_el)
+                html.write("meme-chip_index.html",method="html")
+
+                doc.add(ReStRaw(format="html",options={'file':"meme-chip_index.html"}))
+            #end if (os.path.exists(meme_index_path)):
 
     doc.write()
     doc.close()
 
     # 6. convert reSt to PDF and HTML
-    rst2html_call = 'rst2html.py --stylesheet-path=/nfs/antdata/web_stage/css/lsr.css ' \
-                    '%s %s'%(reSt_path,reSt_html_path)
+#    rst2html_call = 'rst2html.py --stylesheet-path=/nfs/antdata/web_stage/css/lsr.css ' \
+#                   '%s %s'%(reSt_path,reSt_html_path)
+    rst2html_call = 'rst2html.py --stylesheet-path=%s ' \
+        '%s %s'%(css_path,reSt_path,reSt_html_path)
     sys.stderr.write(rst2html_call+'\n')
     r = call(rst2html_call,shell=True)
 
-    pdf_name = exp_name+'_info.pdf'
-    pdf_path = os.path.join(infosite_path,pdf_name)
+    pdf_name = macs_name+'_info.pdf'
+    pdf_path = os.path.join(os.getcwd(),pdf_name)
     r = call('rst2pdf %s -o %s'%(reSt_path,pdf_path),shell=True)
 
     # 7. write out url to infosite

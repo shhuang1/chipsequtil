@@ -7,7 +7,7 @@ import sys
 from optparse import OptionParser, OptionGroup, SUPPRESS_HELP
 
 from pypeline import Pypeline, ProcessPypeStep as PPS, PythonPypeStep as PyPS, parse_steplist
-from chipsequtil import get_file_parts, get_macs_name, get_org_settings
+from chipsequtil import get_file_parts, get_org_settings
 from chipsequtil.util import MultiLineHelpFormatter
 from TAMO import MotifTools
 from TAMO.MD.THEME import parser as theme_parser
@@ -55,8 +55,7 @@ parser.add_option('--filter-neg-peaks-args',dest='filter_neg_peaks_args',default
 parser.add_option('--peaks-to-fa-args',dest='peaks_to_fa_args',default='--fixed-peak-width=200',help='double quote wrapped arguments for peaks_to_fasta.py [default: %default]')
 parser.add_option('--bg-exec',dest='bg_exec',default='rejection_sample_fasta.py',help='the executable to use for generating background sequences for THEME, if not an absolute path it needs to be on your shell environment path [default: %default]')
 parser.add_option('--bg-args',dest='bg_args',default='--num-seq=2.1x',help='double quote wrapped arguments for background sequence generation utility [default: %default]')
-parser.add_option('--meme-args',dest='meme_args',default="",help='double quote wrapped arguments for meme-chip [default: %default]')
-parser.add_option('--theme-args',dest='theme_args',default='--beta=0.7 --cv=5 --trials=25 fg_fn bg_fn hyp markov',help='double quote wrapped arguments for THEME.py [default: %default]')
+parser.add_option('--theme-args',dest='theme_args',default='--beta=0.7 --cv=5 --trials=25',help='double quote wrapped arguments for THEME.py [default: %default]')
 parser.add_option('--motif-pval-cutoff',dest='motif_pval',type='float',default=1e-5,help='the p-value cutoff for sending non-refined enrichmed motifs to THEME for refinement')
 parser.add_option('--parallelize',dest='parallelize',action='store_true',help='parallelize portions of the pipeline using qsub, only works from SGE execution hosts')
 parser.add_option('--ucsc',dest='ucsc',action='store_true',default=False,help='perform tasks for automated integration with UCSC genome browser [default:%default]')
@@ -156,7 +155,14 @@ if __name__ == '__main__' :
     if control_fn :
         cnt_flag = '-c %s'%control_fn
 
-    macs_name = get_macs_name(opts)
+    # parse macs_args so we can extract mfold and pvalue...in a rather silly way
+    macs_mfold = [x for x in opts.macs_args.split(' ') if 'mfold' in x]
+    macs_mfold = macs_mfold[0].split('=',1)[1] if len(macs_mfold) >= 1 else 'DEF'
+
+    macs_pvalue = [x for x in opts.macs_args.split(' ') if 'pvalue' in x]
+    macs_pvalue = macs_pvalue[0].split('=',1)[1] if len(macs_pvalue) >= 1 else 'DEF'
+    macs_name = opts.exp_name+'_mfold%s_pval%s'%(macs_mfold,macs_pvalue)
+
     macs_peaks_fn = macs_name+'_peaks.xls'
     macs_neg_peaks_fn = macs_name+'_negative_peaks.xls'
     macs_screen_output_fn = macs_name+'_output.txt'
@@ -227,9 +233,10 @@ if __name__ == '__main__' :
          calls.append("filter_macs_peaks.py --encode-filters %(filter_neg_peaks_args)s %(neg_peaks_fn)s"%filtered_d)
     steps.append(PPS('Filter MACS peaks',calls,env=os.environ))
 
-    #############################################################################
-    # get peak sequences
-    #############################################################################
+
+    ############################################################################
+    # THEME
+    ############################################################################
     # extract foreground and generate background sequences
     fg_fn = filtered_peaks_fn.replace('.xls','.fa')
     fg_d = {'opts':opts.peaks_to_fa_args,
@@ -247,15 +254,10 @@ if __name__ == '__main__' :
     calls = ["rejection_sample_fasta.py %(opts)s --output=%(bg_fn)s %(organism)s %(fg_fn)s"%bg_d]
     steps.append(PPS('Generate Background Sequences',calls,env=os.environ))
 
-    ############################################################################
-    # THEME
-    ############################################################################
     # run THEME on fg
     theme_opts, theme_args = theme_parser.parse_args(opts.theme_args.split(' '))
-    #hyp_fn = org_settings['theme_hypotheses']
-    #markov_fn = org_settings['theme_markov']
-    hyp_fn = theme_args[2]
-    markov_fn = theme_args[3]
+    hyp_fn = org_settings['theme_hypotheses']
+    markov_fn = org_settings['theme_markov']
 
     # run THEME w/ randomization by running each motif individuall
     # this is because TAMO.MD has a memory leak
@@ -290,7 +292,7 @@ if __name__ == '__main__' :
     #  --interactive         run the script interactively
 
     motif_fn = '%s_motifs_beta%s_cv%s.txt'%(macs_name,theme_opts.beta,theme_opts.cv)
-    theme_d = {'opts':' '.join('--%s=%s'%(o,v) for o,v in vars(theme_opts).iteritems()),
+    theme_d = {'opts':opts.theme_args,
                'fg_fn':fg_fn,
                'bg_fn':bg_fn,
                'hyp':hyp_fn,
@@ -299,6 +301,7 @@ if __name__ == '__main__' :
                'random_fn':random_cv_fn,
                'motif_fn':motif_fn
               }
+
     theme_call = "THEME.sh %(opts)s %(fg_fn)s %(bg_fn)s %(hyp)s %(markov)s " \
                  "--motif-file=%(tamo_motif_fn)s " \
                  "--random-output=%(random_fn)s " \
@@ -306,27 +309,9 @@ if __name__ == '__main__' :
                  "--randomization"
 
     calls = [theme_call%theme_d]
-    #steps.append(PPS('Run THEME',calls,env=os.environ))
+    steps.append(PPS('Run THEME',calls,env=os.environ))
 
-    ############################################################################
-    # meme-chip
-    ############################################################################
-    meme_oc = '%s_meme'%macs_name
-    meme_log = '%s_meme_output.log'%(macs_name)
-    #meme_bg_markov = '%s_meme.markov0'%macs_name
-    meme_d = {'meme_args':opts.meme_args,
-              'meme_log':meme_log,
-              'fg_fn':fg_fn,
-              #'bg_fn':bg_fn,
-              #'bg_markov':meme_bg_markov,
-              'meme_oc':meme_oc
-              }
-    calls = ["meme-chip -oc %(meme_oc)s %(meme_args)s %(fg_fn)s 2>&1 | tee %(meme_log)s"%meme_d]
-    steps.append(PPS("Run MEME-ChIP",calls,env=os.environ))
-    
-    #############################################################################
     # build infosite
-    #############################################################################
     calls = ['build_chipseq_infosite.py %s'%opts.infosite_args]
     steps.append(PPS('Build infosite',calls,env=os.environ))
 

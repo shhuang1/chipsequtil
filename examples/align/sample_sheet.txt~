@@ -1,0 +1,5 @@
+reads_path	reads_file	target	conditions	technique	replicate	dataset_role	local_id	part_number
+/data/illumina_runs/data2/120815_JONAS_2113_AD0YE2ACXX/Unaligned/Project_CH/Sample_Col-0_air_DNase1_8_14_15	Col-0_air_DNase1_8_14_15_ATCACG_L006_R1_001.fastq.gz	Dnase-Hypersentive-Site	Echotype=Col-0#Age=3-day#temperature=22-degree-celsius#	Dnase-Seq	Rep-1	Dnase		
+/data/illumina_runs/data2/120815_JONAS_2113_AD0YE2ACXX/Unaligned/Project_CH/Sample_Col-0_air_DNase1_8_14_15	Col-0_air_DNase1_8_14_15_ATCACG_L006_R1_002.fastq.gz	Dnase-Hypersentive-Site		Dnase-Seq	Rep-1			
+/data/illumina_runs/data2/120815_JONAS_2113_AD0YE2ACXX/Unaligned/Project_CH/Sample_Col-0_air_DNase1_8_14_15	Col-0_air_DNase1_8_14_15_ATCACG_L006_R1_003.fastq.gz	Dnase-Hypersentive-Site			Rep-1			
+/data/illumina_runs/data2/120815_JONAS_2113_AD0YE2ACXX/Unaligned/Project_CH/Sample_Col-0_air_DNase1_8_14_15	Col-0_air_DNase1_8_14_15_ATCACG_L006_R1_004.fastq.gz	Dnase-Hypersentive-Site			Rep-1			

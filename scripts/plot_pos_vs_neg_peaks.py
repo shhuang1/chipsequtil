@@ -40,13 +40,24 @@ if __name__ == '__main__' :
     neg_peaks.sort()
 
     min_pval, max_pval = min(pos_pvals+neg_pvals), max(pos_pvals+neg_pvals)
-
     pval_rng = arange(min_pval,max_pval,(max_pval-min_pval)/100.)
-
+    if (len(pos_pvals)>0):
+        pos_pval_rng = pval_rng
+    else:
+        pos_pval_rng = []
+    if (len(neg_pvals)>0):
+        neg_pval_rng = pval_rng
+    else:
+        neg_pval_rng = []
+        
     # construct cdfs
     pos_cdf, neg_cdf = [], []
-    for pval in pval_rng :
+    #for pval in pval_rng :
+    #    pos_cdf.append(len(filter(lambda x: x >= pval,pos_pvals)))
+    #    neg_cdf.append(len(filter(lambda x: x >= pval,neg_pvals)))
+    for pval in pos_pval_rng:
         pos_cdf.append(len(filter(lambda x: x >= pval,pos_pvals)))
+    for pval in neg_pval_rng:
         neg_cdf.append(len(filter(lambda x: x >= pval,neg_pvals)))
 
     # normalize cdfs
@@ -56,8 +67,10 @@ if __name__ == '__main__' :
     # log of pvals
     pos_logs = map(log10,pos_cdf)
     neg_logs = map(log10,neg_cdf)
-    plot(pval_rng,pos_logs)
-    plot(pval_rng,neg_logs)
+    #plot(pval_rng,pos_logs)
+    #plot(pval_rng,neg_logs)
+    plot(pos_pval_rng,pos_logs)
+    plot(neg_pval_rng,neg_logs)
     ytics, ylabs = yticks()
     clf()
 
@@ -77,8 +90,10 @@ if __name__ == '__main__' :
             pos_ratio.append(pos/neg)
 
     subplot(211)
-    plot(pval_rng, pos_logs, 'b-')
-    plot(pval_rng, neg_logs, 'g-')
+    #plot(pval_rng, pos_logs, 'b-')
+    #plot(pval_rng, neg_logs, 'g-')
+    plot(pos_pval_rng, pos_logs, 'b-')
+    plot(neg_pval_rng, neg_logs, 'g-')
     yticks(ytics,[int(10**y) for y in ytics])
     title('positive vs. negative peaks')
     legend(('positive','negative'),loc='upper right')
@@ -88,7 +103,7 @@ if __name__ == '__main__' :
 
     subplot(212)
     plot(pval_rng[:len(pos_ratio)], map(log10,pos_ratio), 'k-')
-    plot(pval_rng[len(pos_ratio):], map(log10,pos_only),'k--')
+    plot(pval_rng[len(pos_ratio):len(pos_ratio)+len(pos_only)], map(log10,pos_only),'k--')
     #plot(pval_rng,pos_ratio, 'k-')
     axis('tight')
     xlabel('-log(p-value)')
