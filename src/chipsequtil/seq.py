@@ -1,10 +1,5 @@
 from itertools import izip
-<<<<<<< HEAD
-#from textwrap import wrap
-from textwrap import wrap,fill
-=======
 from textwrap import wrap, fill
->>>>>>> upstream/public_release
 
 # FASTA functions and classes
 def fasta_itr(f) :
