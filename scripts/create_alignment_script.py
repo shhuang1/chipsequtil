@@ -129,6 +129,14 @@ if __name__ == '__main__' :
         all_tool_settings.update(local_tool_settings)
 
         ############################################################################
+        # alignment run name
+        ############################################################################
+        def_run_name = os.path.basename(os.getcwd())
+        run_name = input('Alignment run name',def_run_name)
+        run_name = run_name.replace(' ','_')
+        json_dict['run name'] = run_name
+
+        ############################################################################
         # name of the sample sheet
         ############################################################################
         samp_fn_text = """The sample sheet specifies the location of the raw reads
@@ -218,9 +226,7 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
             pipeline_args.append(('--%s-opts'%(aln),all_tool_settings[aln][aln_opt]))
 
             announce('%s index configuration'%aln)
-            #global_aln_ind_list = global_aln_settings.get('indices','').split()
-            #local_aln_ind_list = local_aln_settings.get('indices','',).split()
-            valid_aln_ind_list = all_aln_settings.get('indices','').split() #global_aln_ind_list + local_aln_ind_list
+            valid_aln_ind_list = all_aln_settings.get('indices','').split()
             aln_ind_text = """\
 Below are the %(aln)s alignment indices available on this system.  The pipeline will
 use the settings for the entire execution. If you do not see a set of settings that 
@@ -233,7 +239,6 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
             for aln_ind in valid_aln_ind_list:
                 wb(aln_ind.ljust(8))
                 print ':', all_aln_settings.get(aln_ind+'.description','No description')
-                print ':', settings
             aln_ind = ''
 
             while aln_ind not in valid_aln_ind_list:
@@ -241,7 +246,8 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
                 print
 
             json_dict['%s index'%(aln)] = aln_ind
-            json_dict['species'] = all_tool_settings[aln][aln_ind+'.species']
+            species = all_tool_settings[aln][aln_ind+'.species']
+            json_dict['species'] = species
             pipeline_args.append(('--%s-ind-loc'%(aln),all_tool_settings[aln][aln_ind+'.loc']))
 
             nthread = ''
@@ -264,48 +270,33 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
         samp_ifh = open(samp_fn,'r')
         samp_reader = csv.DictReader(samp_ifh,dialect='excel-tab')
         for samp_line in samp_reader:
-            reads_dir = samp_line['reads_dir']
-            reads_file_list = samp_line['reads_file'].split(',')
-            reads_partnum_list = samp_line['part_number'].split(',')
-            reads_file_format = samp_line['reads_file_format']
-            local_id = samp_line['local_id']
-
-            dest_dir_values = samp_line.copy()
-            if (reads_file_format=='fastq.gz' or reads_file_format=='fastq'):
-                dest_dir_values['file_format'] = 'raw-seqfile_fastq'
-            else:
-                raise ValueError("Unrecognized reads file format: %s"%(reads_file_format))
-
-            dest_dir_values['species'] = json_dict['species']
-            dest_dir = dest_dir_pattern%(dest_dir_values)
+            local_id = samp_line['Local-ID']
+            dest_dir = os.path.join(aln_final_path,dest_dir_pattern%(samp_line))
             json_dict['destination directory'][local_id] = dest_dir
             if (os.path.exists(dest_dir)):
                 if (not os.path.isdir(dest_dir)):
                     raise ValueError('Alignment file destination directory name %s exists but is not a directory'%(dest_dir))
             else:
-                os.mkdir(dest_dir)
+                os.makedirs(dest_dir)
             pipeline_args.append(('--dest-dir',dest_dir))
 
-            if (len(reads_file_list)!=len(reads_partnum_list)):
-                raise ValueError("Invalid sample specification: for %s, found %d read files but %d part numbers"%(local_id,
-                                                                                                                  len(reads_file_list),
-                                                                                                                  len(reads_partnum_list)))
             json_dict['reads files'][local_id] = []
-            reads_symlink_values = samp_line.copy()
-            for (rf,rn) in zip(reads_file_list,reads_partnum_list):
-                reads_symlink_values['part_number'] = rn
-                reads_file_fp = os.path.join(reads_dir,rf)
-                reads_symlink_fn = reads_symlink_pattern%(reads_symlink_values)
-                if os.path.exist(reads_symlink_fn):
-                    if (os.path.realpath(reads_symlink_fn) != os.path.abspath(reads_file_fp)):
-                            ans = raw_input('Symlink %s in current directory points to %s but you asked for %s, overwrite symbolic link? y/[n]'%(reas_symlink_fn,os.path.realpath(reads_symlink_fn),os.path.abspath(reads_file_fp)))
-                            if ans=='y':
-                                os.remove(reads_symlink_fn)
-                                os.symlink(reads_file_fp,reads_symlink_fn)
-                else:
-                    os.symlink(reads_file_fp,reads_symlink_fn)
 
-                json_dict['reads files'][local_id].append(reads_symlink_fn)
+            samp_file_parts = samp_line['reads_file_parts'].split(',')
+            samp_line_copy = samp_line.copy()
+            for part_id in samp_file_parts:
+                samp_line_copy['part_id'] = part_id
+                symlink_src = os.path.join(samp_line['reads_dir'],'%s%s%s'%(samp_line['reads_file_prefix'],part_id,samp_line['reads_file_suffix']))
+                symlink_target = os.path.join(dest_dir,reads_symlink_pattern%(samp_line_copy))
+                if os.path.exists(symlink_target):
+                    if (os.path.realpath(symlink_target) != os.path.abspath(symlink_src)):
+                        ans = raw_input('Symlink %s in current directory points to %s but you asked for %s, overwrite symbolic link? y/[n]'%(symlink_target,os.path.realpath(symlink_target),os.path.abspath(symlink_src)))
+                        if ans=='y':
+                            os.remove(symlink_target)
+                            os.symlink(symlink_src,symlink_target)
+                else:
+                    os.symlink(symlink_src,symlink_target)
+                json_dict['reads files'][local_id].append(symlink_target)                        
             pipeline_args.append(('--reads-files',','.join(json_dict['reads files'][local_id])))
 
         # put all the command line utility args in json_dict as its own dict
@@ -313,19 +304,19 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
                 
         # get default align_pipeline.py args
         pipeline_args = ' '.join(['%s="%s"'%(k,v) for k,v in pipeline_args])
-        print 'align_pipeline.py --exp-name=%s %s --print-args'%(exp_name,pipeline_args)
-        def_args = Popen('align_pipeline.py --exp-name=%s %s --print-args'%(exp_name,pipeline_args),shell=True,stdout=PIPE,stderr=PIPE).communicate()[0]
+        print 'align_pipeline.py --run-name=%s %s --print-args'%(run_name,pipeline_args)
+        def_args = Popen('align_pipeline.py --run-name=%s %s --print-args'%(run_name,pipeline_args),shell=True,stdout=PIPE,stderr=PIPE).communicate()[0]
 
         wb('Creating script...\n')
-        script_fn = '%s_aln_pipeline.sh'%exp_name
+        script_fn = '%s_aln_pipeline.sh'%run_name
         with open(script_fn,'w') as script_f :
-            script_f.write(script_template%{'species':species,'aligner':aligner,'def_args':def_args})
+            script_f.write(script_template%{'species':species,'aligner':aln,'def_args':def_args})
             os.chmod(script_f.name,stat.S_IRWXU|stat.S_IRWXG|stat.S_IROTH)
 
         print end_text%{'script_fn':script_fn}
 
         wb('Creating parameter file...\n')
-        json_fn = '%s_params.json'%exp_name
+        json_fn = '%s_aln_params.json'%run_name
         with open(json_fn,'w') as json_f :
             json.dump(json_dict,json_f,indent=4)
 
