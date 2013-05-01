@@ -32,7 +32,9 @@ from optparse import OptionParser
 from subprocess import Popen, PIPE
 
 import chipsequtil
-from chipsequtil import get_global_settings, get_local_settings, check_org_settings, GLOBAL_SETTINGS_FN, LOCAL_SETTINGS_FN, get_global_tool_settings, get_local_tool_settings, check_tool_settings
+from chipsequtil import get_global_settings, get_local_settings, check_org_settings, GLOBAL_SETTINGS_FN, LOCAL_SETTINGS_FN, get_global_tool_settings, get_local_tool_settings, check_tool_settings, GLOBAL_TOOL_SETTINGS_FN, LOCAL_TOOL_SETTINGS_FN
+import generate_uniform_symlinks
+
 from terminalcontroller import TERM_ESCAPE, announce, warn, error, white, bold
 
 usage = "%prog"
@@ -142,25 +144,28 @@ an example."""
         ############################################################################
         # name of the alignment output path
         ############################################################################
-        aln_path_text = """The alignment output files will be stored temporarily in the
-current directory.  You might want to use a local directory (not NFS) for faster
-processing.  The very last step of the alignment script will convert the the aligned 
+        aln_path_text = """The alignment output files will be stored temporarily in a 
+temporary directory (default to current directory).  You might want to use a local temporary 
+directory (not NFS) for faster processing.  The very last step of the alignment script will convert the the aligned 
 files in this directory to BAM format and move to a common location on the NFS."""
 
         print textwrap.fill(aln_path_text)
 
         def_path = os.path.basename(os.getcwd())
-        exp_name = input('Experiment name',def_path)
-        exp_name = exp_name.replace(' ','_') # shhhhhhhh...
+        aln_temp_path = input('Temporary directory',def_path)
+        aln_temp_path = aln_temp_path.replace(' ','_')
+        aln_final_path = input('Final alignment file destination',def_path)
+        aln_final_path = aln_final_path.replace(' ','_')
 
-        json_dict['experiment name'] = exp_name
+        json_dict['alignment temp directory'] = aln_temp_path
+        json_dict['alignment final directory'] = aln_final_path
 
         ############################################################################
         # Alignment settings
         ############################################################################
         announce('Alignment tool configuration')
-        valid_aln_settings = global_tool_settings['tools']['alignment'].split() + local_tool_settings['tools']['alignment'].split()
-        valid_aln_settings.sort()
+        valid_aln_tools = global_tool_settings.get('tools',dict()).get('alignment','').split() + local_tool_settings.get('tools',dict()).get('alignment','').split()
+        valid_aln_tools.sort()
 
         aln_text = """\
 Below are the alignment tools available on this system.  The pipeline will
@@ -171,18 +176,7 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
         print
 
         wb('Available settings\n')
-        # global settings
-        print 'Global settings: (%s)'%GLOBAL_TOOL_SETTINGS_FN
-        aln_sets = [(k,global_tool_settings[k]) for k in valid_aln_settings]
-        for aln, settings in aln_sets :
-            wb(aln.ljust(8))
-            print ':', settings.get('description','No description')
-            #for k,v in settings.items() :
-            #    print ' '*4+k+": "+str(v)
-
-        # local settings
-        print 'Local settings: (%s)'%LOCAL_TOOL__SETTINGS_FN
-        aln_sets = [(k,local_tool_settings[k]) for k in valid_aln_settings]
+        aln_sets = [(k,all_tool_settings[k]) for k in valid_aln_tools]
         for aln, settings in aln_sets :
             wb(aln.ljust(8))
             print ':', settings.get('description','No description')
@@ -190,19 +184,18 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
             #    print ' '*4+k+": "+str(v)
         aln = ''
 
-        while aln not in valid_aln_settings :
-            aln = input('Choose alignment tool, one of ('+','.join(valid_aln_settings)+')')
+        while aln not in valid_aln_tools :
+            aln = input('Choose alignment tool, one of ('+','.join(valid_aln_tools)+')')
         print
 
         json_dict['aligner'] = aln
 
         ###### bowtie 1 & 2 #####
         if (aln in ['bowtie','bowtie2']):
-            global_aln_settings = global_tool_settings[aln]
-            local_aln_settings = local_tool_settings[aln]
+            all_aln_settings = all_tool_settings[aln]
 
             announce('%s options configuration'%aln)
-            valid_aln_opt_settings = global_aln_settings.get('opt_sets','').split() + local_aln_settings.get('opt_sets','').split()
+            valid_aln_opt_settings = all_aln_settings.get('opt_sets','').split()
             aln_opt_text = """
 Below are the %(aln)s alignment options available on this system.  The pipeline will
 use the settings for the entire execution. If you do not see a set of settings that 
@@ -212,20 +205,12 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
             print
 
             wb('Available settings\n')
-            # global settings
-            print 'Global settings: (%s)'%GLOBAL_TOOL_SETTINGS_FN
-            aln_opt_sets = [(k,global_aln_settings.get(k,'')) for k in global_aln_settings.get('opt_sets','').split()]
-            for aln, settings in aln_opt_sets :
-                wb(aln.ljust(8))
+            aln_opt_sets = [(k,all_aln_settings.get(k,'')) for k in all_aln_settings.get('opt_sets','').split()]
+            for aln_opt, settings in aln_opt_sets :
+                wb(aln_opt.ljust(8))
                 print ':', settings
+            aln_opt = ''
             
-            # local settings
-            print 'Local settings: (%s)'%LOCAL_TOOL_SETTINGS_FN
-            aln_opt_sets = [(k,local_aln_settings.get(k,'')) for k in local_aln_settings.get('opt_sets','').split()]
-            for aln, settings in aln_opt_sets :
-                wb(aln.ljust(8))
-                print ':', settings
-
             while aln_opt not in valid_aln_opt_settings :
                 aln_opt = input('Choose '+aln+' options, one of ('+','.join(valid_aln_opt_settings)+')')
                 print
@@ -233,9 +218,9 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
             pipeline_args.append(('--%s-opts'%(aln),all_tool_settings[aln][aln_opt]))
 
             announce('%s index configuration'%aln)
-            global_aln_ind_list = global_aln_settings.get('indices','').split()
-            local_aln_ind_list = local_aln_settings.get('indices','',).split()
-            valid_aln_ind_list = global_aln_ind_list + local_aln_ind_list
+            #global_aln_ind_list = global_aln_settings.get('indices','').split()
+            #local_aln_ind_list = local_aln_settings.get('indices','',).split()
+            valid_aln_ind_list = all_aln_settings.get('indices','').split() #global_aln_ind_list + local_aln_ind_list
             aln_ind_text = """\
 Below are the %(aln)s alignment indices available on this system.  The pipeline will
 use the settings for the entire execution. If you do not see a set of settings that 
@@ -245,18 +230,11 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
             print
 
             wb('Available settings\n')
-            # global settings
-            print 'Global settings: (%s)'%GLOBAL_TOOL_SETTINGS_FN
-            for ind in global_aln_ind_list:
-                wb(ind.ljust(8))
-                print ':', global_aln_settings.get(ind+'.description','No description')
+            for aln_ind in valid_aln_ind_list:
+                wb(aln_ind.ljust(8))
+                print ':', all_aln_settings.get(aln_ind+'.description','No description')
                 print ':', settings
-            
-            # local settings
-            print 'Local settings: (%s)'%LOCAL_TOOL_SETTINGS_FN
-            for ind in local_aln_ind_list:
-                wb(ind.ljust(8))
-                print ':', local_aln_settings.get(ind+'.description','No description')
+            aln_ind = ''
 
             while aln_ind not in valid_aln_ind_list:
                 aln_ind = input('Choose '+aln+' index, one of ('+','.join(valid_aln_ind_list)+')')
