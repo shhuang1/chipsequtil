@@ -198,7 +198,6 @@ if __name__ == '__main__' :
         # do the negative peaks
         # negative peak file is now filtered
         neg_peak_fns = glob.glob(peak_json[peak_fn]['name']+'_negative_peaks_*.xls')
-        neg_peak_stats = None
 
         #TODO - do check for file exists
         if neg_peak_fns :
@@ -234,20 +233,12 @@ if __name__ == '__main__' :
         if os.path.exists(ucsc_track_fn) :
             peak_json[peak_fn]['ucsc tracks'] = open(ucsc_track_fn).readlines()
 
-        #font = {'size':'9'}
-        #mp.rc('font',**font)
+        font = {'size':'9'}
+        mp.rc('font',**font)
 
         figsize = (3.5,3.5)
         subplots_sizes = {'top':0.8,'left':0.15,'right':0.95}
-
-        # sometimes there are no negative peaks
-        hist_labels = ['+ peaks']
-        hist_peak_stats = [peak_stats]
-        if neg_peak_stats is not None :
-            hist_labels.append('- peaks')
-            hist_peak_stats.append(neg_peak_stats)
-
-        #hist_labels = ('+ peaks','- peaks')
+        hist_labels = ('+ peaks','- peaks')
         # create histograms for each of the attributes
         len_hist_name = macs_f.file_info['name']+'_length.png'
         len_hist_fn = os.path.join(infosite_img_path,len_hist_name)
@@ -256,14 +247,12 @@ if __name__ == '__main__' :
         peak_json[peak_fn]['length distribution url'] = len_hist_url
         mp.figure(figsize=figsize)
         mp.subplots_adjust(**subplots_sizes)
-
-        hist_stats = [p['length'] for p in hist_peak_stats]
-        mp.hist(hist_stats,label=hist_labels,bins=20,log=True)
+        length_min,length_max = get_peak_stats_minmax(peak_stats,neg_peak_stats,'length')
+        mp.hist((peak_stats['length'],neg_peak_stats['length']),label=hist_labels,bins=20,range=(length_min,length_max),log=True)
         mp.title('%s\npeak length distribution'%macs_f.file_info['name'])
         mp.xlabel('peak length')
         mp.ylabel('# peaks')
         mp.legend()
-        print len_hist_fn
         mp.savefig(len_hist_fn)
         mp.clf()
 
@@ -274,8 +263,8 @@ if __name__ == '__main__' :
         peak_json[peak_fn]['tag distribution url'] = tags_hist_url
         mp.figure(figsize=figsize)
         mp.subplots_adjust(**subplots_sizes)
-        hist_stats = [p['tags'] for p in hist_peak_stats]
-        mp.hist(hist_stats,label=hist_labels,bins=20,log=True)
+        tags_min,tags_max = get_peak_stats_minmax(peak_stats,neg_peak_stats,'tags')
+        mp.hist((peak_stats['tags'],neg_peak_stats['tags']),label=hist_labels,bins=20,range=(tags_min,tags_max),log=True)
         mp.title('%s\npeak tag count distribution'%macs_f.file_info['name'])
         mp.xlabel('# tags')
         mp.ylabel('# peaks')
@@ -290,8 +279,8 @@ if __name__ == '__main__' :
         peak_json[peak_fn]['pvalue distribution url'] = pval_hist_url
         mp.figure(figsize=figsize)
         mp.subplots_adjust(**subplots_sizes)
-        hist_stats = [p['pvalue'] for p in hist_peak_stats]
-        mp.hist(hist_stats,label=hist_labels,bins=20,log=True)
+        pvalue_min,pvalue_max = get_peak_stats_minmax(peak_stats,neg_peak_stats,'pvalue')
+        mp.hist((peak_stats['pvalue'],neg_peak_stats['pvalue']),label=hist_labels,bins=20,range=(pvalue_min,pvalue_max),log=True)
         mp.title('%s\npeak -10*log10(p-valuek) distribution'%macs_f.file_info['name'])
         mp.xlabel('-10*log10(p-value)')
         mp.ylabel('# peaks')
@@ -306,8 +295,8 @@ if __name__ == '__main__' :
         peak_json[peak_fn]['fold distribution url'] = fold_hist_url
         mp.figure(figsize=figsize)
         mp.subplots_adjust(**subplots_sizes)
-        hist_stats = [p['fold_enrichment'] for p in hist_peak_stats]
-        mp.hist(hist_stats,label=hist_labels,bins=20,log=True)
+        fe_min,fe_max = get_peak_stats_minmax(peak_stats,neg_peak_stats,'fold_enrichment')
+        mp.hist((peak_stats['fold_enrichment'],neg_peak_stats['fold_enrichment']),label=hist_labels,bins=20,range=(fe_min,fe_max),log=True)
         mp.title('%s\npeak fold enrichment distribution'%macs_f.file_info['name'])
         mp.xlabel('fold enrichment')
         mp.ylabel('# peaks')
@@ -322,7 +311,6 @@ if __name__ == '__main__' :
         peak_json[peak_fn]['fdr distribution url'] = fdr_hist_url
         mp.figure(figsize=figsize)
         mp.subplots_adjust(**subplots_sizes)
-<<<<<<< HEAD
         fdr_min,fdr_max = get_peak_stats_minmax(peak_stats,neg_peak_stats,'fdr')
         mp.hist(peak_stats['fdr'],label=hist_labels[0],bins=20,range=(fdr_min,fdr_max),log=True)
         mp.title('%s\npeak fdr distribution'%macs_f.file_info['name'])
@@ -331,16 +319,6 @@ if __name__ == '__main__' :
         mp.legend()
         mp.savefig(fdr_hist_fn)
         mp.clf()
-=======
-
-        if neg_peak_stats :
-            mp.hist(peak_stats['fdr'],label=hist_labels[0],bins=20,log=True)
-            mp.title('%s\npeak fdr distribution'%macs_f.file_info['name'])
-            mp.xlabel('fdr')
-            mp.ylabel('# peaks')
-            mp.legend()
-            mp.savefig(fdr_hist_fn)
-            mp.clf()
 
         chr_dist_name = macs_f.file_info['name']+'_chr_dist.png'
         chr_dist_fn = os.path.join(infosite_img_path,chr_dist_name)
@@ -352,11 +330,7 @@ if __name__ == '__main__' :
             chr_sizes_fn = get_org_settings(json_d['org'])['ucsc_chrom_sizes']
             chromos = [r[0] for r in reader(open(chr_sizes_fn),delimiter='\t')]
         else :
-            chromos = set(pos_chr_dist.keys())
-            if neg_peak_stats :
-                chromos = chromos.union(neg_chr_dist.keys())
-            chromos = list(chromos)
-
+            chromos = list(set(pos_chr_dist.keys()).union(neg_chr_dist.keys()))
         standard_chromos = filter(lambda x: re.search('^chr[0-9MXY]+$',x) is not None,chromos)
 
         # hack chrM, chrX and chrY so they sort right
@@ -380,11 +354,13 @@ if __name__ == '__main__' :
         other_chromos = filter(lambda x: re.search('^chr[0-9MXY]+$',x) is None,chromos)
 
         pos_plot_chr_dist = defaultdict(int)
+        neg_plot_chr_dist = defaultdict(int)
         for chrom in standard_chromos :
             pos_plot_chr_dist[chrom] += pos_chr_dist.get(chrom,0)
+            neg_plot_chr_dist[chrom] += neg_chr_dist.get(chrom,0)
         for chrom in other_chromos :
             pos_plot_chr_dist['Other'] += pos_chr_dist.get(chrom,0)
-
+            neg_plot_chr_dist['Other'] += neg_chr_dist.get(chrom,0)
         chromos.append('Other')
         mp.figure(figsize=figsize)
         mp.subplots_adjust(bottom=0.18,**subplots_sizes)
@@ -394,21 +370,12 @@ if __name__ == '__main__' :
                color='b',
                label='Positive'
               )
-
-        if neg_peak_stats :
-            neg_plot_chr_dist = defaultdict(int)
-            for chrom in standard_chromos :
-                neg_plot_chr_dist[chrom] += neg_chr_dist.get(chrom,0)
-            for chrom in other_chromos :
-                neg_plot_chr_dist['Other'] += neg_chr_dist.get(chrom,0)
-
-            mp.bar([x+0.45 for x in range(len(chromos))],
-                   [neg_plot_chr_dist[k] for k in chromos],
-                   width=0.45,
-                   color='g',
-                   label='Negative'
-                  )
-
+        mp.bar([x+0.45 for x in range(len(chromos))],
+               [neg_plot_chr_dist[k] for k in chromos],
+               width=0.45,
+               color='g',
+               label='Negative'
+              )
         mp.xticks([x+0.45 for x in range(len(chromos))],chromos,rotation=90)
         mp.title('%s\nPeaks by chromosome'%macs_f.file_info['name'])
         mp.xlabel('Chromosome')
@@ -418,14 +385,14 @@ if __name__ == '__main__' :
         mp.clf()
 
         # pos vs neg peaks
-        if neg_peak_stats :
-            pos_v_neg_name = '%s_pos_v_neg.png'%macs_f.file_info['name']
-            pos_v_neg_fn = os.path.join(infosite_img_path,pos_v_neg_name)
-            pos_v_neg_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+pos_v_neg_name
-            peak_json[peak_fn]['pos v neg url'] = pos_v_neg_url
-            cmd = 'plot_pos_vs_neg_peaks.py --output=%s %s %s'%(pos_v_neg_fn,peak_fn, neg_peak_fn)
-            sys.stderr.write(cmd+'\n')
-            r = call(cmd,shell=True)
+        pos_v_neg_name = '%s_pos_v_neg.png'%macs_f.file_info['name']
+        pos_v_neg_fn = os.path.join(infosite_img_path,pos_v_neg_name)
+        #pos_v_neg_url = json_d['stage url']+'/'+infosite_dir_name+'/images/'+pos_v_neg_name
+        pos_v_neg_url = infosite_dir_name+'/images/'+pos_v_neg_name
+        peak_json[peak_fn]['pos v neg url'] = pos_v_neg_url
+        cmd = 'plot_pos_vs_neg_peaks.py --output=%s %s %s'%(pos_v_neg_fn,peak_fn, neg_peak_fn)
+        sys.stderr.write(cmd+'\n')
+        r = call(cmd,shell=True)
 
         # motif stuff
         if opts.skip_motif_scan or opts.skip_motif_stuff :
@@ -535,18 +502,13 @@ if __name__ == '__main__' :
             doc.add(ReStSimpleTable(None,[['UCSC integration was not enabled for this experiment']]))
 
         # peak quality plots
-        if neg_peak_stats :
-            img_tbl1 = ReStSimpleTable(None, [
-                        [
-                         ReStImage(peak_stats['pos v neg url'],options={'width':'600px','align':'center'}),
-                        ]
-                       ]
-                      )
-            doc.add(img_tbl1)
-
-            fdr_val = ReStImage(peak_stats['fdr distribution url'],options={'width':'250px','align':'center'})
-        else :
-            fdr_val = 'No negative peaks, not applicable'
+        img_tbl1 = ReStSimpleTable(None, [
+                    [
+                     ReStImage(peak_stats['pos v neg url'],options={'width':'600px','align':'center'}),
+                    ]
+                   ]
+                  )
+        doc.add(img_tbl1)
 
         img_tbl2 = ReStSimpleTable(None, [
                     [
@@ -556,7 +518,7 @@ if __name__ == '__main__' :
                     ],
                     [
                      ReStImage(peak_stats['fold distribution url'],options={'width':'250px','align':'center'}),
-                     fdr_val,
+                     ReStImage(peak_stats['fdr distribution url'],options={'width':'250px','align':'center'}),
                      ReStImage(peak_stats['chr distribution url'],options={'width':'250px','align':'center'})
                     ]
                   ]
@@ -737,7 +699,6 @@ if __name__ == '__main__' :
                             sys.stderr.write("Couldn't rename file for pattern %s, just " \
                                              "assuming its there\n"%(infosite_dir_name+'/images/*_%d_peakmot.png'%from_id))
                 """
-<<<<<<< HEAD
                     new_id_fn = glob.glob(infosite_dir_name+'/images/*_%s_peakmot.png'%rec[2])[0]
                     motif_plot_urls.append(json_d['stage url']+'/'+new_id_fn)
 
@@ -803,46 +764,6 @@ if __name__ == '__main__' :
 
                 doc.add(ReStRaw(format="html",options={'file':"meme-chip_index.html"}))
             #end if (os.path.exists(meme_index_path)):
-=======
-                try :
-                    new_id_fn = glob.glob(infosite_dir_name+'/images/*_%s_peakmot.png'%rec[2])[0]
-                    motif_plot_urls.append(json_d['stage url']+'/'+new_id_fn)
-                except Exception, e :
-                    sys.stderr.write('Exception thrown in plotting motifs, skipping: %s'%e)
-
-            doc.add(ReStSimpleTable(['**%s**'%x for x in motif_header],motif_data[:top_n]))
-
-            # create another file with the full table
-            motif_results_base, motif_results_ext = os.path.splitext(motif_results_fn)
-            motif_doc_fn = motif_results_base+'.rst'
-            motif_doc_path = os.path.join(infosite_path,motif_doc_fn)
-            motif_doc_html_fn = motif_results_base+'.html'
-            motif_doc_html_path = os.path.join(infosite_path,motif_doc_html_fn)
-            motif_doc_url = json_d['stage url']+'/'+infosite_dir_name+'/'+motif_doc_html_fn
-            motif_doc = ReStDocument(motif_doc_path)
-            motif_doc.add(ReStSection('%s Full Motif Results'%peak_stats['name']))
-            motif_doc.add('`Back to main infopage`_')
-            motif_doc.add(ReStSimpleTable(['**%s**'%x for x in motif_header],motif_data))
-            motif_doc.add('`Back to main infopage`_')
-            motif_doc.add(ReStHyperlink('Back to main infopage',url=reSt_url))
-            motif_doc.write()
-            motif_doc.close()
-            rst2html_call = 'rst2html.py --stylesheet-path=/nfs/antdata/web_stage/css/lsr.css ' \
-                            '%s %s'%(motif_doc_path,motif_doc_html_path)
-            sys.stderr.write(rst2html_call+'\n')
-            r = call(rst2html_call,shell=True)
-            doc.add('`All refined motifs`_')
-            doc.add(ReStHyperlink('All refined motifs',url=motif_doc_url))
-
-            # individual motif plots
-            plt_tbl = []
-            for i,url in enumerate(motif_plot_urls[:30]) :
-                if i%3 == 0 :
-                    plt_tbl.append([])
-                plt_tbl[-1].append(ReStImage(url))
-
-            doc.add(ReStSimpleTable(('**Peak strength vs refined motif strength**','(based on top 2000 peak sequences by pvalue)',''),plt_tbl))
->>>>>>> upstream/public_release
 
     doc.write()
     doc.close()
