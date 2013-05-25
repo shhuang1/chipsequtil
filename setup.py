@@ -21,11 +21,13 @@ if not os.path.exists(dist_settings_path) :
                       in distribution root directory.  org_settings.py script may \
                       not work properly.\n'%dist_settings_path)
 
-scripts = ['scripts/build_chipseq_infosite.py',
+scripts = ['scripts/align_pipeline.py',
+           'scripts/build_chipseq_infosite.py',
            'scripts/chipseq_pipeline.py',
            'scripts/combine_gerald_stats.py',
            'scripts/compare_microarray_binding.py',
            'scripts/create_pipeline_script.py',
+           'scripts/create_alignment_script.py',
            'scripts/extract_promoters.py',
            'scripts/filter_bed_by_position_count.py',
            'scripts/filter_macs_peaks.py',
@@ -59,14 +61,14 @@ scripts = ['scripts/build_chipseq_infosite.py',
 
 # setup and install
 setup(name='chipsequtil',
-      version='0.5',
-      author='Adam Labadorf',
-      author_email='alabadorf@gmail.com',
+      version='0.6',
+      author='Adam Labadorf; Shao-shan Carol Huang',
+      author_email='alabadorf@gmail.com; shhuang1@gmail.com',
       package_dir={'':'src'},
       py_modules=['chipsequtil.nib','chipsequtil.util','chipsequtil.plotting',
                   'chipsequtil.sampling','chipsequtil.seq','chipsequtil.motifs'],
       packages=['chipsequtil'],
-      package_data={'': ['org_settings.cfg']},
+      package_data={'': ['org_settings.cfg','tool_settings.cfg','static/css/*']},
       scripts=scripts,
       #cmdclass={'uninstall': uninstall},
      )
