@@ -33,7 +33,6 @@ from subprocess import Popen, PIPE
 
 import chipsequtil
 from chipsequtil import get_global_settings, get_local_settings, check_org_settings, GLOBAL_SETTINGS_FN, LOCAL_SETTINGS_FN, get_global_tool_settings, get_local_tool_settings, check_tool_settings, GLOBAL_TOOL_SETTINGS_FN, LOCAL_TOOL_SETTINGS_FN
-import generate_uniform_symlinks
 
 from terminalcontroller import TERM_ESCAPE, announce, warn, error, white, bold
 
@@ -50,6 +49,10 @@ parser = OptionParser(usage=usage,description=description,epilog=epilog)
 
 script_template = """\
 #!/bin/bash
+source /etc/profile.d/modules.sh
+
+# modules
+module load shhuang bowtie/0.12.7bin bowtie2/2.1.0bin samtools/0.1.18
 
 # required parameters for the pipeline
 ALIGNER=%(aligner)s
@@ -58,8 +61,7 @@ SPECIES=%(species)s
 # align_pipeline.py is the main workhorse of this analysis
 # you may change any of the arguments below from their defaults
 
-align_pipeline.py $ALIGNER $SPECIES \\
-%(def_args)s
+align_pipeline.py %(def_args)s
 """
 
 start_text = """\
@@ -165,8 +167,40 @@ files in this directory to BAM format and move to a common location on the NFS."
         aln_final_path = input('Final alignment file destination',def_path)
         aln_final_path = aln_final_path.replace(' ','_')
 
+        if (os.path.exists(aln_temp_path)):
+            if (not os.path.isdir(aln_temp_path)):
+                raise ValueError('Temporary directory name %s exists but is not a directory'%(dest_dir))
+        else:
+            os.makedirs(aln_temp_path)
+        pipeline_args.append(('--temp-dir',aln_temp_path))
         json_dict['alignment temp directory'] = aln_temp_path
         json_dict['alignment final directory'] = aln_final_path
+    
+        ####################################
+        # samtools 
+        #####################################
+        announce('samtools index configuration')
+        all_samtools_settings = all_tool_settings['samtools']
+        valid_samtools_ind_list = all_samtools_settings.get('indices','').split()
+        samtools_ind_text = """\
+Below are the samtools indices available on this system.  The pipeline will
+use the settings for the entire execution. If you do not see a set of settings that 
+correspond to files you need you may add your own to %(local_tool)s.  See %(glob_tool)s for details.
+"""
+        print textwrap.fill(samtools_ind_text%{'local_tool':LOCAL_TOOL_SETTINGS_FN,'glob_tool':GLOBAL_TOOL_SETTINGS_FN},break_long_words=False)
+        print
+
+        wb('Available settings\n')
+        for samtools_ind in valid_samtools_ind_list:
+            wb(samtools_ind.ljust(8))
+            print ':', all_samtools_settings.get(samtools_ind+'.description','No description')
+        samtools_ind = ''
+
+        while samtools_ind not in valid_samtools_ind_list:
+            samtools_ind = input('Choose samtools index, one of ('+','.join(valid_samtools_ind_list)+')')
+            print
+        json_dict['samtools index'] = samtools_ind
+        pipeline_args.append(('--samtools-ind-loc',all_samtools_settings[samtools_ind+'.loc']))
 
         ############################################################################
         # Alignment settings
@@ -197,6 +231,10 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
         print
 
         json_dict['aligner'] = aln
+
+        aln_output_format = 'alignment-sam'
+        aln_output_suffix = '.sam'
+        pipeline_args.append(('--output-format',aln_output_suffix))
 
         ###### bowtie 1 & 2 #####
         if (aln in ['bowtie','bowtie2']):
@@ -262,32 +300,46 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
         # done with input, creating script and other stuff
         ############################################################################
         # parse the sample sheet and create symlinks for the read files
-        wb('Reading sample sheet and create symlink for read files if needed')
-        json_dict['destination directory'] = dict()
+        wb('Reading sample sheet and create symlink for read files if needed\n')
+        json_dict['alignment output dir'] = dict()
+        json_dict['alignment output file'] = dict()
         json_dict['reads files'] = dict()
+        json_dict['reads file format'] = dict()
         dest_dir_pattern = all_tool_settings['NameRule']['dest_dir']
         reads_symlink_pattern = all_tool_settings['NameRule']['reads_symlink']
         samp_ifh = open(samp_fn,'r')
         samp_reader = csv.DictReader(samp_ifh,dialect='excel-tab')
         for samp_line in samp_reader:
             local_id = samp_line['Local-ID']
-            dest_dir = os.path.join(aln_final_path,dest_dir_pattern%(samp_line))
-            json_dict['destination directory'][local_id] = dest_dir
-            if (os.path.exists(dest_dir)):
-                if (not os.path.isdir(dest_dir)):
+            samp_line_outfile = samp_line.copy()
+            samp_line_outfile['File-Format'] = aln_output_format 
+            samp_line_outfile['part_id'] = 'all'
+            samp_line_outfile['reads_file_suffix'] = aln_output_suffix
+            final_dir = os.path.join(aln_final_path,dest_dir_pattern%(samp_line_outfile))
+            if (os.path.exists(final_dir)):
+                if (not os.path.isdir(final_dir)):
                     raise ValueError('Alignment file destination directory name %s exists but is not a directory'%(dest_dir))
             else:
-                os.makedirs(dest_dir)
-            pipeline_args.append(('--dest-dir',dest_dir))
+                os.makedirs(final_dir)
+            output_file = reads_symlink_pattern%(samp_line_outfile)
+            json_dict['alignment output dir'][local_id] = final_dir
+            json_dict['alignment output file'][local_id] = output_file
+            pipeline_args.append(('--output-file',output_file))
+            pipeline_args.append(('--final-dir',final_dir))
 
             json_dict['reads files'][local_id] = []
-
             samp_file_parts = samp_line['reads_file_parts'].split(',')
-            samp_line_copy = samp_line.copy()
+            samp_line_symlink = samp_line.copy()
+            symlink_dir = os.path.join(aln_final_path,dest_dir_pattern%(samp_line_symlink))
+            if (os.path.exists(symlink_dir)):
+                if (not os.path.isdir(symlink_dir)):
+                    raise ValueError('Alignment file destination directory name %s exists but is not a directory'%(dest_dir))
+            else:
+                os.makedirs(symlink_dir)
             for part_id in samp_file_parts:
-                samp_line_copy['part_id'] = part_id
+                samp_line_symlink['part_id'] = part_id
                 symlink_src = os.path.join(samp_line['reads_dir'],'%s%s%s'%(samp_line['reads_file_prefix'],part_id,samp_line['reads_file_suffix']))
-                symlink_target = os.path.join(dest_dir,reads_symlink_pattern%(samp_line_copy))
+                symlink_target = os.path.join(symlink_dir,reads_symlink_pattern%(samp_line_symlink))
                 if os.path.exists(symlink_target):
                     if (os.path.realpath(symlink_target) != os.path.abspath(symlink_src)):
                         ans = raw_input('Symlink %s in current directory points to %s but you asked for %s, overwrite symbolic link? y/[n]'%(symlink_target,os.path.realpath(symlink_target),os.path.abspath(symlink_src)))
@@ -295,17 +347,21 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
                             os.remove(symlink_target)
                             os.symlink(symlink_src,symlink_target)
                 else:
+                    print symlink_src,symlink_target
                     os.symlink(symlink_src,symlink_target)
-                json_dict['reads files'][local_id].append(symlink_target)                        
+                json_dict['reads files'][local_id].append(symlink_target)
             pipeline_args.append(('--reads-files',','.join(json_dict['reads files'][local_id])))
+            pipeline_args.append(('--reads-format',samp_line['reads_file_suffix']))
+            json_dict['reads file format'][local_id] = samp_line['reads_file_suffix']
 
         # put all the command line utility args in json_dict as its own dict
         json_dict['pipeline args'] = pipeline_args
                 
         # get default align_pipeline.py args
         pipeline_args = ' '.join(['%s="%s"'%(k,v) for k,v in pipeline_args])
-        print 'align_pipeline.py --run-name=%s %s --print-args'%(run_name,pipeline_args)
-        def_args = Popen('align_pipeline.py --run-name=%s %s --print-args'%(run_name,pipeline_args),shell=True,stdout=PIPE,stderr=PIPE).communicate()[0]
+        print 'align_pipeline.py %s --run-name=%s %s --print-args'%(aln,run_name,pipeline_args)
+        def_args = Popen("align_pipeline.py %s --run-name=%s %s --print-args"%(aln,run_name,pipeline_args),shell=True,stdout=PIPE,stderr=PIPE).communicate()[0]
+        print def_args
 
         wb('Creating script...\n')
         script_fn = '%s_aln_pipeline.sh'%run_name
