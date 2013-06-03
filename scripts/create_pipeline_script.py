@@ -415,6 +415,9 @@ may add your own to %(local_tool)s.  See %(glob_tool)s for details."""
         ############################################################################
         # if the experiment and control files are in a different directory,
         # create symlinks for them
+        if align_fmt=='ANNOJDB':
+            exp_host,exp_db,exp_table = 
+
         exp_dir,exp_fn = os.path.split(os.path.abspath(exp_path))
         if exp_dir != os.getcwd() :
             wb('Creating symlink for experiment file...\n')
