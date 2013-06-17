@@ -414,38 +414,90 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
         # end if (aln in ['bowtie','bowtie2'])
 
         ############################################################################
+        # genome browser integration
+        ############################################################################
+        # annoj
+        announce("AnnoJ integration")
+        aj_text = """The pipeline can include a step to automatically import aligned
+reads to an AnnoJ database and create a fetcher."""
+
+        print textwrap.fill(aj_text,break_long_words=False)
+        
+        annoj_integrate = input('Would you like to import the aligned reads to a AnnoJ database and create fetchers [y/n]?','y')
+        annoj_integrate = False if annoj_integrate=='n' else True
+        annoj_args = ''
+        if annoj_integrate:
+            annoj_args = ['--annoj']
+            annoj_args = ' '.join(annoj_args)
+
+        ############################################################################
         # done with input, creating script and other stuff
         ############################################################################
         # parse the sample sheet and create symlinks for the read files
         wb('Reading sample sheet and create symlink for read files if needed\n')
-        json_dict['alignment output dir'] = dict()
-        json_dict['alignment output file'] = dict()
-        json_dict['reads1 files'] = dict()
-        json_dict['reads2 files'] = dict()
-        json_dict['reads file format'] = dict()
+        for json_dict_name in ['alignment output dir','symlink dir',
+                               'fetcher dir','alignment output file',
+                               'alignment output short name',
+                               'reads1 files','reads2 files','reads file format',
+                               'AnnoJ track title','AnnoJ track info']:
+            json_dict[json_dict_name] = dict()
         dest_dir_pattern = all_tool_settings['NameRule']['dest_dir']
         reads_symlink_pattern = all_tool_settings['NameRule']['reads_symlink']
+        short_name_pattern = all_tool_settings['NameRule']['short_name']
+        aj_title_pattern = all_tool_settings['NameRule']['aj_title']
+        aj_info_pattern = all_tool_settings['NameRule']['aj_info']
         samp_ifh = open(samp_fn,'r')
         samp_reader = csv.DictReader(samp_ifh,dialect='excel-tab')
         samp_reader = (dict((k, v.strip()) for k, v in row.items()) for row in samp_reader)
         for samp_line in samp_reader:
             local_id = samp_line['Local-ID']
             samp_line_outfile = samp_line.copy()
-            samp_line_outfile['File-Format'] = aln_output_format 
             samp_line_outfile['part_id'] = 'all'
             samp_line_outfile['reads_file_suffix'] = aln_output_suffix
+
+            samp_line_outfile['File-Format'] = aln_output_format
             final_dir = os.path.join(aln_final_path,dest_dir_pattern%(samp_line_outfile))
             if (os.path.exists(final_dir)):
                 if (not os.path.isdir(final_dir)):
                     raise ValueError('Alignment file destination directory name %s exists but is not a directory'%(dest_dir))
             else:
                 os.makedirs(final_dir)
-            output_file = reads_symlink_pattern%(samp_line_outfile)
             json_dict['alignment output dir'][local_id] = final_dir
+            pipeline_args.append(('--final-dir',final_dir))
+            output_file = reads_symlink_pattern%(samp_line_outfile)
             json_dict['alignment output file'][local_id] = output_file
             pipeline_args.append(('--output-file',output_file))
-            pipeline_args.append(('--final-dir',final_dir))
+            output_shortname = short_name_pattern%(samp_line_outfile)
+            pipeline_args.append(('--output-shortname',output_shortname))
+            json_dict['alignment output short name'][local_id] = output_shortname
+            aj_title = aj_title_pattern%(samp_line_outfile)
+            json_dict['AnnoJ track title'][local_id] = aj_title
+            pipeline_args.append(('--aj-title',aj_title))
+            aj_info = aj_info_pattern%(samp_line_outfile)
+            json_dict['AnnoJ track info'][local_id] = aj_info
+            pipeline_args.append(('--aj-info',aj_title))
 
+            samp_line_outfile['File-Format'] = 'symlink'
+            symlink_dir = os.path.join(aln_final_path,dest_dir_pattern%(samp_line_outfile))
+            if (os.path.exists(symlink_dir)):
+                if (not os.path.isdir(symlink_dir)):
+                    raise ValueError('Symbolic link directory name %s exists but is not a directory'%(dest_dir))
+            else:
+                os.makedirs(symlink_dir)
+            json_dict['symlink dir'][local_id] = symlink_dir
+            pipeline_args.append(('--symlink-dir',symlink_dir))
+
+            samp_line_outfile['File-Format'] = 'annoj_fetcher'
+            fetcher_dir = os.path.join(aln_final_path,dest_dir_pattern%(samp_line_outfile))
+            if (os.path.exists(fetcher_dir)):
+                if (not os.path.isdir(fetcher_dir)):
+                    raise ValueError('Fetcher directory name %s exists but is not a directory'%(dest_dir))
+            else:
+                os.makedirs(fetcher_dir)
+            json_dict['fetcher dir'][local_id] = fetcher_dir
+            pipeline_args.append(('--fetcher-dir',fetcher_dir))
+
+            # make symlink for each read file
             samp_file_parts = [('reads1_file_prefix','reads1 files','--reads1-files',
                                 'R1',samp_line['reads1_file_prefix'],samp_line['reads1_file_parts']),
                                ('reads2_file_prefix','reads2 files','--reads2-files',
@@ -476,6 +528,7 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
                             os.symlink(symlink_src,symlink_target)
                         json_dict[rf_json][local_id].append(symlink_target)
                 pipeline_args.append((rf_arg,','.join(json_dict[rf_json][local_id])))
+            # end for rf_pref etc
             pipeline_args.append(('--reads-format',samp_line['reads_file_suffix']))
             json_dict['reads file format'][local_id] = samp_line['reads_file_suffix']
         # end for samp_line in samp_reader
@@ -486,8 +539,8 @@ correspond to files you need you may add your own to %(local_tool)s.  See %(glob
                 
         # get default align_pipeline.py args
         pipeline_args = ' '.join(['%s="%s"'%(k,v) for k,v in pipeline_args])
-        print 'align_pipeline.py %s --run-name=%s %s --print-args'%(aln,run_name,pipeline_args)
-        def_args = Popen("align_pipeline.py %s --run-name=%s %s --print-args"%(aln,run_name,pipeline_args),shell=True,stdout=PIPE,stderr=PIPE).communicate()[0]
+        print 'align_pipeline.py %s --run-name=%s %s %s --print-args'%(aln,run_name,annoj_args,pipeline_args)
+        def_args = Popen("align_pipeline.py %s --run-name=%s %s %s --print-args"%(aln,run_name,annoj_args,pipeline_args),shell=True,stdout=PIPE,stderr=PIPE).communicate()[0]
         print def_args
 
         wb('Creating script...\n')

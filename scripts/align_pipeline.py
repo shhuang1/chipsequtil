@@ -8,7 +8,7 @@ import argparse
 
 from pypeline import Pypeline, ProcessPypeStep as PPS, PythonPypeStep as PyPS, parse_steplist
 
-usage = "%prog [options] aligner species"
+usage = "%prog aligner [options]"
 description = """1st generation ChIP-Seq alignment pipeline:
 """
 
@@ -25,11 +25,21 @@ parent_parser_bowtie.add_argument('--run-name',dest='run_name',default=os.path.b
 parent_parser_bowtie.add_argument('--reads1-files',dest='reads1_files',action='append',required=True,help='comma-separated list of read files')
 parent_parser_bowtie.add_argument('--reads2-files',dest='reads2_files',action='append',default=[],help='comma-separated list of read files')
 parent_parser_bowtie.add_argument('--reads-format',dest='reads_format',choices=['.fastq.gz','.fastq'],default='.fastq.gz',help='Format of reads file')
-parent_parser_bowtie.add_argument('--output-file',dest='output_file',action='append',default=[],help='output file names [default: current directory name]')
+parent_parser_bowtie.add_argument('--output-shortname',dest='output_shortname',action='append',default=[],help='short version of output file names')
+parent_parser_bowtie.add_argument('--output-file',dest='output_file',action='append',default=[],help='output file names')
 parent_parser_bowtie.add_argument('--output-format',dest='output_format',choices=['.sam','.bam'],default='.sam',help='Format of output alignment file [default: %(default)s')
 parent_parser_bowtie.add_argument('--temp-dir',dest='temp_dir',default=os.getcwd(),help='directory to store the alignment output files [default: current directory name]')
 parent_parser_bowtie.add_argument('--final-dir',dest='final_dir',action='append',default=[],help='final destination directory for output files')
+parent_parser_bowtie.add_argument('--symlink-dir',dest='symlink_dir',action='append',default=[],help='directory for short symlinks to output files')
+parent_parser_bowtie.add_argument('--fetcher-dir',dest='fetcher_dir',action='append',default=[],help='directory for putting fetchers of AnnoJ browser')
 parent_parser_bowtie.add_argument('--samtools-ind-loc',dest='samtools_ind_loc',required=True,help='path of samtools index')
+parent_parser_bowtie.add_argument('--annoj',dest='annoj',action='store_true',help='whether to import the aligned reads into an AnnoJ database')
+parent_parser_bowtie.add_argument('--aj-dbhost',dest='annoj_dbhost',action='store',help='host of AnnoJ database')
+parent_parser_bowtie.add_argument('--aj-dbname',dest='annoj_dbname',action='store',help='name of AnnoJ database')
+parent_parser_bowtie.add_argument('--aj-dbuser',dest='annoj_dbuser',action='store',help='user name of AnnoJ database')
+parent_parser_bowtie.add_argument('--aj-dbpass',dest='annoj_dbpass',action='store',help='password of AnnoJ database')
+parent_parser_bowtie.add_argument('--aj-title',dest='annoj_title',action='append',default=[],help='title of AnnoJ browser track')
+parent_parser_bowtie.add_argument('--aj-info',dest='annoj_info',action='append',default=[],help='info line of AnnoJ browser track')
 
 parent_parser_bowtie.add_argument('--print-args',dest='print_args',action='store_true',help=argparse.SUPPRESS) # secret ninja option
 
@@ -129,7 +139,6 @@ if __name__ == '__main__' :
                 else: # paired end
                     bowtie_d['reads_files'] = '-1 <(zcat %s) -2 <(zcat %s)'%(' '.join(['\"%s\"'%(f) for f in reads1f.split(',')]),
                                                                              ' '.join(['\"%s\"'%(f) for f in reads2f.split(',')]))
-                #calls.append("gzip -dc %(reads_files)s | %(bowtie_exec)s %(bowtie_opts)s -p %(bowtie_aln_nthread)s %(bowtie_ind_loc)s - %(bowtie_hit)s 2>&1 | tee %(bowtie_log)s"%(bowtie_d))
             else:
                 if (reads2f==''): # single-end only
                     bowtie_d['reads_files'] = reads1f
@@ -199,11 +208,13 @@ if __name__ == '__main__' :
     # sam2bam
     ##################
     calls = []
-    for outf,final_d in zip(args.output_file,args.final_dir):
+    for outf,outf_short,final_d,symlink_d in zip(args.output_file,args.output_shortname,args.final_dir,args.symlink_dir):
         outf_root = os.path.splitext(outf)[0]
         temp_file_fp = os.path.join(args.temp_dir,outf)
         if (aligner in ['bowtie','bowtie2']):
+            temp_bam_dir = args.temp_dir
             temp_bam_fp = os.path.join(args.temp_dir,outf_root)
+            final_bam_dir = final_d
             final_bam_fp = os.path.join(final_d,outf_root)
             if (args.output_format=='.sam'):
                 temp_sam_fp = temp_file_fp
@@ -211,18 +222,22 @@ if __name__ == '__main__' :
                              'samtools_ind_loc':args.samtools_ind_loc,
                              'temp_sam_fp':temp_sam_fp,
                              'temp_bam_fp':temp_bam_fp,
+                             'final_bam_dir':final_bam_dir,
                              'final_bam_fp':final_bam_fp,
                              }
-                calls.append("%(samtools_exec)s view -uSt \"%(samtools_ind_loc)s\" \"%(temp_sam_fp)s\" | %(samtools_exec)s sort - \"%(temp_bam_fp)s\""%sam2bam_d)
-                calls.append("cp \"%(temp_bam_fp)s.bam\" \"%(final_bam_fp)s.bam\""%(sam2bam_d))
+#                calls.append("%(samtools_exec)s view -uSt \"%(samtools_ind_loc)s\" \"%(temp_sam_fp)s\" | %(samtools_exec)s sort - \"%(temp_bam_fp)s.sorted\""%sam2bam_d)
+                calls.append("%(samtools_exec)s index \"%(temp_bam_fp)s.sorted.bam\""%sam2bam_d)
+                calls.append("cp \"%(temp_bam_fp)s.sorted.bam\"* \"%(final_bam_dir)s\""%(sam2bam_d))
             elif (args.output_format=='.bam'):
                 sam2bam_d = {'samtools_exec':'samtools',
                              'samtools_ind_loc':args.samtools_ind_loc,
                              'temp_bam_fp':temp_bam_fp,
+                             'final_bam_dir':final_bam_dir,
                              'final_bam_fp':final_bam_fp,
                              }
                 calls.append("%(samtools_exec)s sort \"%(temp_bam_fp)s.bam \"%(temp_bam_fp)s.sorted\""%sam2bam_d)
-                calls.append("cp \"%(temp_bam_fp)s.sorted.bam\" \"%(final_bam_fp)s.bam\""%(sam2bam_d))
+                calls.append("%(samtools_exec)s index \"%(temp_bam_fp)s.sorted.bam\""%sam2bam_d)
+                calls.append("cp \"%(temp_bam_fp)s.sorted.bam\"* \"%(final_bam_dir)s\""%(sam2bam_d))
         elif (aligner in ['tophat','tophat2']):
             temp_bam_dir = os.path.join(args.temp_dir,outf_root)
             temp_bam_fp = os.path.join(temp_bam_dir,'accepted_hits')
@@ -239,7 +254,8 @@ if __name__ == '__main__' :
                              'final_bam_dir':final_bam_dir,
                              'final_bam_fp':final_bam_fp,
                              }
-                calls.append("%(samtools_exec)s view -uSt \"%(samtools_ind_loc)s\" \"%(temp_sam_fp)s\" | %(samtools_exec)s sort - \"%(temp_bam_fp)s\""%sam2bam_d)
+                calls.append("%(samtools_exec)s view -uSt \"%(samtools_ind_loc)s\" \"%(temp_sam_fp)s\" | %(samtools_exec)s sort - \"%(temp_bam_fp)s.sorted\""%sam2bam_d)
+                calls.append("%(samtools_exec)s index \"%(temp_bam_fp)s.sorted.bam\""%sam2bam_d)
                 calls.append("cd \"%(temp_bam_dir)s\"; find . -type f -not -name accepted_hits.sam -print0 | cpio -0 -pdm \"%(final_bam_dir)s\""%(sam2bam_d))
             elif (args.output_format=='.bam'):
                 sam2bam_d = {'samtools_exec':'samtools',
@@ -249,9 +265,46 @@ if __name__ == '__main__' :
                              'final_bam_dir':final_bam_dir,
                              'final_bam_fp':final_bam_fp,
                              }
-                calls.append("%(samtools_exec)s sort \"%(temp_bam_fp)s.bam\" \"%(temp_bam_fp)s.sorted\""%sam2bam_d)
+#                calls.append("%(samtools_exec)s sort \"%(temp_bam_fp)s.bam\" \"%(temp_bam_fp)s.sorted\""%sam2bam_d)
+                calls.append("%(samtools_exec)s index \"%(temp_bam_fp)s.sorted.bam\""%sam2bam_d)
                 calls.append("cd \"%(temp_bam_dir)s\"; find . -type f -not -name accepted_hits.bam -print0 | cpio -0 -pdm \"%(final_bam_dir)s\""%(sam2bam_d))
+        # end if (aligner in ...)
+        for bam_suffix in ['.sorted.bam','.sorted.bam.bai']:
+            final_bam_symlink = os.path.join(symlink_d,outf_short+bam_suffix)
+            if (os.path.exists(final_bam_symlink)):
+                if (not os.path.islink(final_bam_symlink)):
+                    raise ValueError('Symbolic link target %s exists but is not a link'%(final_bam_symlink))
+                else:
+                    os.remove(final_bam_symlink)
+            calls.append("ln -s %s %s"%(os.path.relpath(final_bam_fp+bam_suffix,symlink_d),
+                                    final_bam_symlink))
     steps.append(PPS("Create BAM file and move to final destination",calls,env=os.environ))
+
+    ###################
+    # AnnoJ
+    ##################
+    calls = []
+    if (args.annoj):
+        for (reads1f,reads2f,outf_short,symlink_d,fetcher_d) in \
+                zip(args.reads1_files,args.reads2_files,args.output_shortname,\
+                        args.symlink_dir,args.fetcher_dir):
+            annoj_d = {'aligner':aligner,
+                       'dbhost':args.aj_dbhost,
+                       'dbname':args.aj_dbname,
+                       'dbuser':args.aj_dbuser,
+                       'dbpass':args.aj_dbpass,
+                       'dbtable':outf_short.replace('-','').replace('(','$').replace(')','$'),
+                       'bamfile':os.path.join(symlink_d,outf_short+'.sorted.bam'),
+                       'fetcher':os.path.join(fetcher_d,outf_short+'.php'),
+                       'title':args.aj_title,
+                       'info':args.aj_info,
+                       }
+            if (reads2f==""):
+                annoj_d['pe'] = '--pe'
+            else:
+                annoj_d['pe'] = ''
+            calls.append("integrate_bam_annoj.py %(aligner) %(pe)s --dbhost=%(dbhost)s --dbname=%(dbname)s --dbuser=%(dbuser)s --dbpass=%(dbpass)s --dbtable=%(dbtable)s --bamfile=%(bamfile)s --fetcher=%(fetcher)s --title=\"%(title)s --info=\"%(info)s\""%(annoj_d))
+    steps.append(PPS("Integrate with AnnoJ browser",calls,env=os.environ))
 
     pipeline.add_steps(steps)
     if args.auto and args.steplist is not None :
